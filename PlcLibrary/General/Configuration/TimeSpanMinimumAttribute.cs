@@ -10,8 +10,8 @@ namespace PlcLibrary.General.Configuration
 
         protected override ValidationResult? IsValid(object? value, ValidationContext ctx)
         {
-            if (value is TimeSpan ts && ts <= _minimum)
-                return new ValidationResult($"{ctx.DisplayName} 必须大于 {_minimum}");
+            if (value is TimeSpan ts && ts < _minimum)
+                return new ValidationResult($"{ctx.DisplayName} 不能小于 {_minimum}");
             return ValidationResult.Success;
         }
     }

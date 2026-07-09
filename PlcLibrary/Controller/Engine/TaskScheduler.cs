@@ -17,10 +17,10 @@ namespace PlcLibrary.Controller.Engine
     internal sealed class TaskScheduler(
         IServiceProvider sp,
         ILogger<TaskScheduler> logger,
-        IEnumerable<IDriverFactory> factories) : ITaskScheduler, IAsyncDisposable
+        IEnumerable<IDriverFactory> factories) : ITaskScheduler, IDisposable, IAsyncDisposable
     {
         private readonly IReadOnlyDictionary<string, IDriverFactory> _factories =
-            factories.ToDictionary(f => f.ProtocolDriver);
+            factories.ToDictionary(f => f.ProtocolDriverName);
         private readonly ConcurrentDictionary<string, TaskActuator> _actuators = new();
         private readonly ConcurrentDictionary<string, DeviceConfiguration> _activeConfigs = new();
         private readonly SemaphoreSlim _applyLock = new(1, 1);
@@ -108,9 +108,17 @@ namespace PlcLibrary.Controller.Engine
             }
         }
 
+        public void Dispose()
+        {
+            foreach (var a in _actuators.Values)
+                a.Dispose();
+            _actuators.Clear();
+            _applyLock.Dispose();
+        }
+
         public async ValueTask DisposeAsync()
         {
-            await StopAsync(CancellationToken.None).ConfigureAwait(false);
+            await Task.WhenAll(_actuators.Values.Select(a => a.StopAsync())).ConfigureAwait(false);
             foreach (var a in _actuators.Values)
                 await a.DisposeAsync().ConfigureAwait(false);
             _actuators.Clear();
@@ -120,7 +128,9 @@ namespace PlcLibrary.Controller.Engine
 
     internal sealed class TaskSchedulerHostedService(ITaskScheduler scheduler) : IHostedService
     {
-        public Task StartAsync(CancellationToken ct) => scheduler.StartAsync(ct);
-        public Task StopAsync(CancellationToken ct) => scheduler.StopAsync(ct);
+        private readonly TaskScheduler _scheduler = (TaskScheduler)scheduler;
+
+        public Task StartAsync(CancellationToken ct) => _scheduler.StartAsync(ct);
+        public Task StopAsync(CancellationToken ct) => _scheduler.StopAsync(ct);
     }
 }

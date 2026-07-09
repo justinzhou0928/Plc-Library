@@ -12,5 +12,8 @@ namespace PlcLibrary.Pipeline.Models
 
         [Range(1, 128)]
         public int MaxHandlerParallelism { get; set; } = Math.Max(1, Environment.ProcessorCount);
+
+        [Range(typeof(TimeSpan), "00:00:01", "00:10:00")]
+        public TimeSpan HandlerTimeout { get; set; } = TimeSpan.FromSeconds(30);
     }
 }

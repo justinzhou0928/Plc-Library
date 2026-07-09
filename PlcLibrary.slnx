@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="PlcLibrary.S7/PlcLibrary.S7.csproj" />
+  <Project Path="PlcLibrary.Tests/PlcLibrary.Tests.csproj" />
+  <Project Path="PlcLibrary/PlcLibrary.csproj" />
+</Solution>

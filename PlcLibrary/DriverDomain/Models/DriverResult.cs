@@ -14,5 +14,11 @@ namespace PlcLibrary.DriverDomain.Models
         public DateTime Timestamp { get; init; }
 
         public DriverResult() { }
+
+        public static DriverResult Good(string address, object? value)
+            => new() { Address = address, Value = value, Status = QualityCode.Good, Timestamp = DateTime.UtcNow };
+
+        public static DriverResult Bad(string address, QualityCode status, string error)
+            => new() { Address = address, Status = status, ErrorMessage = error, Timestamp = DateTime.UtcNow };
     }
 }

@@ -1,7 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
-using System.Text;
 
 namespace PlcLibrary.DriverPool.Models
 {
@@ -11,10 +9,6 @@ namespace PlcLibrary.DriverPool.Models
         /// <summary>每设备最大连接数</summary>
         [Range(1, 100)]
         public int MaxConnectionsPerDevice { get; set; } = 2;
-
-        /// <summary>空闲连接超时</summary>
-        [Range(typeof(TimeSpan), "00:00:01", "01:00:00")]
-        public TimeSpan IdleTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
         /// <summary>最大重试次数</summary>
         [Range(0, 10)]

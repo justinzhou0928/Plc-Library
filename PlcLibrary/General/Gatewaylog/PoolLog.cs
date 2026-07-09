@@ -24,5 +24,9 @@ namespace PlcLibrary.General
         [LoggerMessage(Level = LogLevel.Error,
         Message = "获取驱动失败，设备 {DeviceId}")]
         internal static partial void LogAcquireFailed(ILogger logger, Exception ex, string deviceId);
+
+        [LoggerMessage(Level = LogLevel.Warning,
+        Message = "驱动释放失败。Device={DeviceId}")]
+        internal static partial void LogDriverDisposeFailed(ILogger logger, Exception ex, string deviceId);
     }
 }

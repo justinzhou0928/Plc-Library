@@ -17,26 +17,38 @@ using System.Threading.Tasks;
 
 namespace PlcLibrary.Pipeline.Engine
 {
-    public sealed class DriverResultPipeline(
-        IServiceProvider sp,
-        ILogger<DriverResultPipeline> logger,
-        IOptions<PipelineOptions> options) : IDataPipeline, IAsyncDisposable
+    public sealed class DriverResultPipeline : IDataPipeline, IDisposable, IAsyncDisposable
     {
-        private readonly Channel<DriverResult> _channel = Channel.CreateBounded<DriverResult>(
-            new BoundedChannelOptions(options.Value.Capacity)
-            {
-                FullMode = BoundedChannelFullMode.Wait,
-                SingleReader = true,
-                SingleWriter = false,
-            });
+        private readonly IServiceProvider _sp;
+        private readonly ILogger<DriverResultPipeline> _logger;
+        private readonly Channel<DriverResult> _channel;
         private readonly ConcurrentDictionary<Guid, Channel<DriverResult>> _subscribers = new();
-        private readonly IDataHandler[] _handlers = sp.GetServices<IDataHandler>().ToArray();
-        private readonly SemaphoreSlim _handlerGate = new(Math.Max(1, options.Value.MaxHandlerParallelism));
+        private readonly SemaphoreSlim _handlerGate;
+        private readonly TimeSpan _handlerTimeout;
+        private int _disposed;
+
+        public DriverResultPipeline(
+            IServiceProvider sp,
+            ILogger<DriverResultPipeline> logger,
+            IOptions<PipelineOptions> options)
+        {
+            _sp = sp;
+            _logger = logger;
+            _channel = Channel.CreateBounded<DriverResult>(
+                new BoundedChannelOptions(options.Value.Capacity)
+                {
+                    FullMode = BoundedChannelFullMode.Wait,
+                    SingleReader = true,
+                    SingleWriter = false,
+                });
+            _handlerGate = new SemaphoreSlim(Math.Max(1, options.Value.MaxHandlerParallelism));
+            _handlerTimeout = options.Value.HandlerTimeout;
+        }
 
         public async Task StartAsync(CancellationToken ct)
         {
-            if (_handlers.Length > 0)
-                PipelineLog.LogHandlersRegistered(logger, _handlers.Length);
+            var handlers = _sp.GetServices<IDataHandler>().ToArray();
+            PipelineLog.LogHandlersRegistered(_logger, handlers.Length);
 
             try
             {
@@ -44,12 +56,12 @@ namespace PlcLibrary.Pipeline.Engine
                     await DispatchAsync(result, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
-            catch (Exception ex) { PipelineLog.LogFanoutFailed(logger, ex); }
+            catch (Exception ex) { PipelineLog.LogFanoutFailed(_logger, ex); }
             finally
             {
                 foreach (var (_, sub) in _subscribers)
                     sub.Writer.TryComplete();
-                PipelineLog.LogPipelineStopped(logger);
+                PipelineLog.LogPipelineStopped(_logger);
             }
         }
 
@@ -86,21 +98,30 @@ namespace PlcLibrary.Pipeline.Engine
             }
         }
 
-        public ValueTask DisposeAsync()
+        public void Dispose()
         {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             _channel.Writer.TryComplete();
             foreach (var (_, sub) in _subscribers)
                 sub.Writer.TryComplete();
             _handlerGate.Dispose();
-            return default;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            _channel.Writer.TryComplete();
+            foreach (var (_, sub) in _subscribers)
+                sub.Writer.TryComplete();
+            _handlerGate.Dispose();
+            await Task.CompletedTask;
         }
 
         private async ValueTask DispatchAsync(DriverResult result, CancellationToken ct)
         {
-            if (_handlers.Length > 0)
-            {
-                await Task.WhenAll(_handlers.Select(h => InvokeHandlerAsync(h, result, ct))).ConfigureAwait(false);
-            }
+            var handlers = _sp.GetServices<IDataHandler>().ToArray();
+            if (handlers.Length > 0)
+                await Task.WhenAll(handlers.Select(h => InvokeHandlerAsync(h, result, ct))).ConfigureAwait(false);
 
             if (!_subscribers.IsEmpty)
             {
@@ -112,8 +133,13 @@ namespace PlcLibrary.Pipeline.Engine
         private async Task InvokeHandlerAsync(IDataHandler handler, DriverResult result, CancellationToken ct)
         {
             await _handlerGate.WaitAsync(ct).ConfigureAwait(false);
-            try { await handler.HandleAsync(result, ct).ConfigureAwait(false); }
-            catch (Exception ex) { PipelineLog.LogHandlerFailed(logger, ex, handler.GetType().Name); }
+            try
+            {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(_handlerTimeout);
+                await handler.HandleAsync(result, timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) { PipelineLog.LogHandlerFailed(_logger, ex, handler.GetType().Name); }
             finally { _handlerGate.Release(); }
         }
     }

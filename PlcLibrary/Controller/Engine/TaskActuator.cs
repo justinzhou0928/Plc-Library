@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
+using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
-using PlcLibrary.DriverPool.Engine;
 using PlcLibrary.General;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.Pipeline.Interfaces;
@@ -13,8 +13,8 @@ namespace PlcLibrary.Controller.Engine
     internal sealed class TaskActuator(
         ILogger<TaskActuator> logger,
         DeviceConfiguration device,
-        DeviceDriverPool pool,
-        IDataPipeline pipeline) : IAsyncDisposable
+        IDeviceAccessor accessor,
+        IDataPipeline pipeline) : IDisposable, IAsyncDisposable
     {
         private readonly object _gate = new();
         private CancellationTokenSource? _cts;
@@ -50,9 +50,11 @@ namespace PlcLibrary.Controller.Engine
 
         private async Task ExecuteAsync(CancellationToken ct)
         {
-            using var timer = new PeriodicTimer(device.CollectionInterval);
-            while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+            while (!ct.IsCancellationRequested)
             {
+                try { await Task.Delay(device.CollectionInterval, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return; }
+
                 try { await CollectOnceAsync(ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { return; }
                 catch (Exception ex) { ControllerLog.LogCollectionFailed(logger, ex, device.Id); }
@@ -62,28 +64,32 @@ namespace PlcLibrary.Controller.Engine
         private async Task CollectOnceAsync(CancellationToken ct)
         {
             var points = device.TagPoints;
-            var driver = await pool.AcquireAsync(device, ct).ConfigureAwait(false);
-            try
-            {
-                var values = await driver.ReadAsync(points, ct).ConfigureAwait(false);
-                if (values.Length != points.Length)
-                    ControllerLog.LogPointCountMismatch(logger, device.Id, points.Length, values.Length);
+            var values = await accessor.ReadAsync(device, points, ct).ConfigureAwait(false);
+            if (values.Length != points.Length)
+                ControllerLog.LogPointCountMismatch(logger, device.Id, points.Length, values.Length);
 
-                for (var i = 0; i < values.Length; i++)
+            for (var i = 0; i < values.Length; i++)
+            {
+                var v = values[i];
+                var point = i < points.Length ? points[i] : null;
+                try
                 {
-                    var v = values[i];
-                    var point = i < points.Length ? points[i] : null;
                     await pipeline.HandleAsync(v with
                     {
                         DeviceId = device.Id,
                         TagId = point?.TagId ?? v.Address
                     }, ct).ConfigureAwait(false);
                 }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { ControllerLog.LogCollectionFailed(logger, ex, device.Id); }
             }
-            finally
-            {
-                pool.Return(driver, device);
-            }
+        }
+
+        public void Dispose()
+        {
+            _cts?.Cancel();
+            _cts?.Dispose();
+            _cts = null;
         }
 
         public async ValueTask DisposeAsync()

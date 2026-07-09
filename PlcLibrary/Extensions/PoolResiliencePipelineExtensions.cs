@@ -3,6 +3,7 @@ using Polly;
 using Polly.CircuitBreaker;
 using Polly.Retry;
 using System;
+using System.Threading;
 
 namespace PlcLibrary.Extensions
 {
@@ -16,7 +17,8 @@ namespace PlcLibrary.Extensions
                     MaxRetryAttempts = options.MaxRetryAttempts,
                     BackoffType = DelayBackoffType.Exponential,
                     Delay = options.RetryDelay,
-                    ShouldHandle = new PredicateBuilder().Handle<Exception>(),
+                    ShouldHandle = new PredicateBuilder()
+                        .Handle<Exception>(ex => ex is not OperationCanceledException),
                 })
                 .AddTimeout(options.OperationTimeout)
                 .AddCircuitBreaker(new CircuitBreakerStrategyOptions
@@ -24,7 +26,8 @@ namespace PlcLibrary.Extensions
                     FailureRatio = 0.5,
                     MinimumThroughput = options.CircuitBreakerMinimumThroughput,
                     BreakDuration = options.CircuitBreakerDuration,
-                    ShouldHandle = new PredicateBuilder().Handle<Exception>(),
+                    ShouldHandle = new PredicateBuilder()
+                        .Handle<Exception>(ex => ex is not OperationCanceledException),
                 });
     }
 }

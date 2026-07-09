@@ -2,9 +2,11 @@ using Microsoft.Extensions.Logging;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverPool.Models;
+using PlcLibrary.Extensions;
 using PlcLibrary.General;
 using PlcLibrary.General.Configuration;
 using Polly;
+using Polly.Registry;
 using System;
 using System.Threading;
 using System.Threading.Channels;
@@ -17,8 +19,10 @@ namespace PlcLibrary.DriverPool.Engine
         DeviceConfiguration device,
         IDriverFactory factory,
         PoolOptions options,
-        ResiliencePipeline pipeline) : IAsyncDisposable
+        ResiliencePipelineRegistry<string> registry) : IDisposable, IAsyncDisposable
     {
+        private readonly ResiliencePipeline _pipeline =
+            registry.GetOrAddPipeline($"{PipelineKey.Pool}:{device.Id}", builder => builder.AddPoolStrategies(options));
         private readonly SemaphoreSlim _semaphore = new(options.MaxConnectionsPerDevice, options.MaxConnectionsPerDevice);
         private readonly Channel<IProtocolDriver> _idle = Channel.CreateBounded<IProtocolDriver>(
             new BoundedChannelOptions(options.MaxConnectionsPerDevice)
@@ -31,7 +35,8 @@ namespace PlcLibrary.DriverPool.Engine
         public async ValueTask<IProtocolDriver> AcquireAsync(CancellationToken ct)
         {
             IProtocolDriver? driver = null;
-            await _semaphore.WaitAsync(ct).ConfigureAwait(false);
+            if (!await _semaphore.WaitAsync(options.OperationTimeout, ct).ConfigureAwait(false))
+                throw new TimeoutException($"无法在 {options.OperationTimeout.TotalSeconds} 秒内获取设备 {device.Id} 的驱动连接");
             try
             {
                 if (_idle.Reader.TryRead(out driver))
@@ -45,7 +50,7 @@ namespace PlcLibrary.DriverPool.Engine
                 if (driver.DriverStatus is DriverStatus.Disconnected or DriverStatus.Faulted)
                 {
                     PoolLog.LogConnectingDriver(logger, device.Id, (byte)driver.DriverStatus);
-                    await pipeline.ExecuteAsync(async token =>
+                    await _pipeline.ExecuteAsync(async token =>
                     {
                         if (driver.DriverStatus == DriverStatus.Faulted)
                             await driver.TryReconnectAsync(token).ConfigureAwait(false);
@@ -74,6 +79,8 @@ namespace PlcLibrary.DriverPool.Engine
             _semaphore.Release();
         }
 
+        public void Dispose() => _semaphore.Dispose();
+
         public async ValueTask DisposeAsync()
         {
             while (_idle.Reader.TryRead(out var driver))
@@ -84,10 +91,7 @@ namespace PlcLibrary.DriverPool.Engine
         private async ValueTask TryDisposeAsync(IProtocolDriver driver)
         {
             try { await driver.DisposeAsync().ConfigureAwait(false); }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to dispose driver. Device={DeviceId}", device.Id);
-            }
+            catch (Exception ex) { PoolLog.LogDriverDisposeFailed(logger, ex, device.Id); }
         }
     }
 }
