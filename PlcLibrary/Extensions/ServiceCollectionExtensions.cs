@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using PlcLibrary.Controller.Engine;
 using PlcLibrary.Controller.Interfaces;
@@ -15,15 +14,10 @@ namespace PlcLibrary.Extensions
 {
     public static class ServiceCollectionExtensions
     {
-        public static IServiceCollection AddPlcLibrary(this IServiceCollection services, IConfiguration configuration)
+        public static IServiceCollection AddPlcLibrary(this IServiceCollection services)
         {
-            services.AddOptions<PoolOptions>()
-                .Bind(configuration.GetSection(PoolOptions.SectionName))
-                .ValidateOnStart();
-
-            services.AddOptions<PipelineOptions>()
-                .Bind(configuration.GetSection(PipelineOptions.SectionName))
-                .ValidateOnStart();
+            services.AddOptions<PoolOptions>().ValidateOnStart();
+            services.AddOptions<PipelineOptions>().ValidateOnStart();
 
             services.AddSingleton<ResiliencePipelineRegistry<string>>();
 

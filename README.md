@@ -3,7 +3,7 @@
 PLC 数据采集库，提供连接池管理、定时采集调度、数据分发管道。
 
 - 协议无关驱动接口，一行注册新协议
-- 连接池 + Polly 弹性策略（重试、超时、断路器）
+- 连接池 + Polly 弹性策略（重试、超时、断路器），每设备独立隔离
 - 设备配置热更新，差量 reconcile
 - Channel 管道 fan-out 到多个 `IDataHandler`
 - 主动读写 + 自动采集双模式
@@ -22,14 +22,64 @@ dotnet add package PlcLibrary.S7
 
 ## 快速开始
 
-### 1. 注册服务
-
 ```csharp
-builder.Services.AddPlcLibrary(builder.Configuration);
-builder.Services.AddDriver<S7Driver>("S7");
+using Microsoft.Extensions.Logging;
+using PlcLibrary.Controller.Interfaces;
+using PlcLibrary.DriverDomain.Models;
+using PlcLibrary.Extensions;
+using PlcLibrary.General.Configuration;
+using PlcLibrary.Pipeline.Interfaces;
+using PlcLibrary.S7;
+
+var builder = Host.CreateApplicationBuilder(args);
+
+var devices = new[]
+{
+    new DeviceConfiguration
+    {
+        Id = "plc-001",
+        Name = "1号线",
+        Protocol = "S7",
+        ConnectionString = "host:10.38.103.107;port:102;timeout:3000;rack:0;slot:0;cpu:S71200;",
+        TagPoints = new[]
+        {
+            new TagPointConfiguration { TagId = "t1", Address = "DB21.DBX10.2", DataType = "System.Boolean" },
+            new TagPointConfiguration { TagId = "t2", Address = "DB21.DBX10.0", DataType = "System.Boolean" },
+        },
+        CollectionInterval = TimeSpan.FromSeconds(1),
+    },
+};
+
+builder.Services
+    .AddPlcLibrary()
+    .AddDriver<S7Driver>("S7")
+    .AddSingleton<IDataHandler, ConsoleHandler>();
+
+var host = builder.Build();
+await host.Services.GetRequiredService<ITaskScheduler>().ApplyDevicesAsync(devices);
+await host.RunAsync();
+
+internal sealed class ConsoleHandler(ILogger<ConsoleHandler> logger) : IDataHandler
+{
+    public ValueTask HandleAsync(DriverResult result, CancellationToken ct)
+    {
+        logger.LogInformation("[{DeviceId}] {Address} = {Value} ({Status})",
+            result.DeviceId, result.Address, result.Value, result.Status);
+        return ValueTask.CompletedTask;
+    }
+}
 ```
 
-### 2. 配置设备
+> 设备多时可用 `BackgroundService` + `IConfiguration` 从 appsettings.json 读取，参考下文 JSON 配置方式。
+
+### 使用 JSON 配置
+
+```csharp
+// 绑定 Options 到 appsettings.json
+builder.Services.AddPlcLibrary();
+builder.Services.Configure<PoolOptions>(builder.Configuration.GetSection("DriverPool"));
+builder.Services.Configure<PipelineOptions>(builder.Configuration.GetSection("Pipeline"));
+```
 
 ```json
 {
@@ -49,12 +99,8 @@ builder.Services.AddDriver<S7Driver>("S7");
 }
 ```
 
-### 3. 推送设备到调度器
-
 ```csharp
-internal sealed class DeviceLoader(
-    IConfiguration config,
-    ITaskScheduler scheduler) : BackgroundService
+internal sealed class DeviceLoader(IConfiguration config, ITaskScheduler scheduler) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -63,23 +109,6 @@ internal sealed class DeviceLoader(
             await scheduler.ApplyDevicesAsync(devices, ct);
     }
 }
-
-builder.Services.AddHostedService<DeviceLoader>();
-```
-
-### 4. 接收采集数据
-
-```csharp
-internal sealed class MyHandler : IDataHandler
-{
-    public Task HandleAsync(DriverResult result, CancellationToken ct)
-    {
-        Console.WriteLine($"[{result.DeviceId}] {result.Address} = {result.Value}");
-        return Task.CompletedTask;
-    }
-}
-
-builder.Services.AddSingleton<IDataHandler, MyHandler>();
 ```
 
 ## 连接字符串
@@ -99,13 +128,14 @@ builder.Services.AddSingleton<IDataHandler, MyHandler>();
 
 示例：`host:192.168.1.1;port:102;rack:0;slot:1;cpu:S71500`
 
-## 驱动池配置
+## 配置
+
+### 驱动池
 
 ```json
 {
   "DriverPool": {
     "MaxConnectionsPerDevice": 2,
-    "IdleTimeout": "00:05:00",
     "MaxRetryAttempts": 3,
     "RetryDelay": "00:00:01",
     "CircuitBreakerMinimumThroughput": 5,
@@ -115,13 +145,14 @@ builder.Services.AddSingleton<IDataHandler, MyHandler>();
 }
 ```
 
-## 管道配置
+### 管道
 
 ```json
 {
   "Pipeline": {
     "Capacity": 10000,
-    "MaxHandlerParallelism": 4
+    "MaxHandlerParallelism": 4,
+    "HandlerTimeout": "00:00:30"
   }
 }
 ```
@@ -132,11 +163,10 @@ builder.Services.AddSingleton<IDataHandler, MyHandler>();
 
 | 接口 | 说明 |
 |------|------|
-| `ITaskScheduler` | 推送设备配置、启停调度 |
+| `ITaskScheduler` | 推送设备配置，差量 reconcile |
 | `IDataHandler` | 接收采集推送 |
 | `IDeviceAccessor` | 主动读写设备 |
 | `IProtocolDriver` | 协议驱动实现 |
-| `IAsyncDisposable` | 完成异步清理 |
 | `IDriverFactory` | 驱动工厂（通常用 `AddDriver<T>` 替代） |
 | `IDataPipeline` | 数据管道（通常不需要直接使用） |
 
