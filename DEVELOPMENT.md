@@ -173,24 +173,32 @@ flowchart LR
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
 flowchart LR
-    A["host:192.168.1.1;port:502"] --> B["Parse() → Dictionary"]
-    B --> C["Get&lt;T&gt;() → 实例"]
+    A["host:192.168.1.1;port:502"] --> B["KeyValueConnectionString.Parse()"]
+    B --> C["ConfigurationBuilder.Get&lt;T&gt;()"]
+    C --> D["强类型实例"]
 ```
+
+**简单场景（无 enum 或 enum 兼容）—— 一行：**
 
 ```csharp
-using PlcLibrary.DriverDomain.Parser;
+public static MyConfig Parse(string cs)
+    => ConnectionStringBinder.Bind<MyConfig>(cs);
+```
 
-public sealed record ModbusDriverConfig
+**含第三方 enum（如 S7.Net.CpuType）—— Bind + 手动补 enum：**
+
+```csharp
+public static S7DriverConfig Parse(string cs)
 {
-    public string Host { get; init; } = "127.0.0.1";
-    public int Port { get; init; } = 502;
-    public int Timeout { get; init; } = 3000;
-    public byte SlaveId { get; init; } = 1;
-
-    public static ModbusDriverConfig Parse(string connectionString)
-        => ConnectionStringBinder.Bind<ModbusDriverConfig>(connectionString);
+    var config = ConnectionStringBinder.Bind<S7DriverConfig>(cs);
+    var dict = KeyValueConnectionString.Parse(cs);
+    if (dict.TryGetValue("cpu", out var cpu) && Enum.TryParse<CpuType>(cpu, true, out var t))
+        config = config with { CpuType = t };
+    return config;
 }
 ```
+
+`Bind<T>()` 处理 int、string、short、bool 等内置类型；第三方 enum 可能绑定失败，通过 `with` 表达式仅覆盖该字段。
 
 ### 2. 实现 IProtocolDriver
 
@@ -202,14 +210,9 @@ using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.General.Configuration;
 
 [ProtocolDriverName("Modbus")]
-public sealed class ModbusDriver : IProtocolDriver
+public sealed class ModbusDriver(ILogger<ModbusDriver> logger, DeviceConfiguration device) : IProtocolDriver
 {
-    private readonly ModbusDriverConfig _config;
-
-    public ModbusDriver(DeviceConfiguration device)
-    {
-        _config = ModbusDriverConfig.Parse(device.ConnectionString);
-    }
+    private readonly ModbusDriverConfig _config = ModbusDriverConfig.Parse(device.ConnectionString);
 
     public DriverStatus DriverStatus { get; private set; }
 

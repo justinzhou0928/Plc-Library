@@ -16,6 +16,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PlcLibrary\PlcLibrary.csproj" />
+    <ProjectReference Include="..\PlcLibrary.S7\PlcLibrary.S7.csproj" />
+    <ProjectReference Include="..\PlcLibrary.Modbus\PlcLibrary.Modbus.csproj" />
   </ItemGroup>
 
 </Project>

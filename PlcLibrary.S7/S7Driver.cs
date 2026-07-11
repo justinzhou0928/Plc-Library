@@ -15,23 +15,12 @@ using System.Threading.Tasks;
 namespace PlcLibrary.S7
 {
     [ProtocolDriverName("S7")]
-    public sealed class S7Driver : IProtocolDriver
+    public sealed class S7Driver(ILogger<S7Driver> logger, DeviceConfiguration device) : IProtocolDriver
     {
-        private readonly ILogger<S7Driver>? _logger;
-        private readonly S7DriverConfig _config;
+        private readonly S7DriverConfig _config = S7DriverConfig.Parse(device.ConnectionString);
         private Plc? _plc;
         private DriverStatus _status = DriverStatus.Disconnected;
         private readonly object _stateLock = new();
-
-        public S7Driver(DeviceConfiguration device)
-        {
-            _config = S7DriverConfig.Parse(device.ConnectionString);
-        }
-
-        public S7Driver(ILogger<S7Driver> logger, DeviceConfiguration device) : this(device)
-        {
-            _logger = logger;
-        }
 
         public DriverStatus DriverStatus
         {
@@ -100,15 +89,20 @@ namespace PlcLibrary.S7
                     batchIndices.Add(i);
                 }
                 catch (OperationCanceledException) { throw; }
-                catch { fallback[i] = true; }
+                catch
+                {
+                    S7Log.LogAddressParseFailed(logger, points[i].Address);
+                    fallback[i] = true;
+                }
             }
 
             if (batchItems.Count > 0)
             {
                 try { await plc.ReadMultipleVarsAsync(batchItems, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { throw; }
-                catch
+                catch (Exception ex)
                 {
+                    S7Log.LogBatchReadFallback(logger, ex);
                     foreach (var idx in batchIndices)
                         fallback[idx] = true;
                 }
@@ -135,6 +129,7 @@ namespace PlcLibrary.S7
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
+                    S7Log.LogReadPointFailed(logger, ex, points[i].Address);
                     results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadCommFailure, ex.Message);
                 }
             }
@@ -172,7 +167,7 @@ namespace PlcLibrary.S7
                     return dr;
                 }
                 catch (OperationCanceledException) { throw; }
-                catch (Exception ex) { if (_logger is not null) S7Log.LogBatchWriteFallback(_logger, ex); }
+                catch (Exception ex) { S7Log.LogBatchWriteFallback(logger, ex); }
             }
 
             var results = new DriverResult[values.Count];
@@ -187,6 +182,7 @@ namespace PlcLibrary.S7
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
+                    S7Log.LogWritePointFailed(logger, ex, kvp.Key.Address);
                     results[index] = DriverResult.Bad(kvp.Key.Address, QualityCode.BadCommFailure, ex.Message);
                 }
                 index++;

@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="PlcLibrary.Modbus/PlcLibrary.Modbus.csproj" Id="7daafcba-19ce-4fba-8721-8b2ac0923c94" />
   <Project Path="PlcLibrary.S7/PlcLibrary.S7.csproj" />
   <Project Path="PlcLibrary.Tests/PlcLibrary.Tests.csproj" />
   <Project Path="PlcLibrary/PlcLibrary.csproj" />

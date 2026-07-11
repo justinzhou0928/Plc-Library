@@ -8,6 +8,16 @@ PLC 数据采集库，提供连接池管理、定时采集调度、数据分发�
 - Channel 管道 fan-out 到多个 `IDataHandler`
 - 主动读写 + 自动采集双模式
 
+## 支持的驱动
+
+| 驱动 | 协议 | 状态 |
+|------|------|------|
+| `S7Driver` | Siemens S7 (S7-200/300/400/1200/1500) | 可用 |
+| `ModbusTcpDriver` | Modbus TCP | 可用 |
+| `ModbusUdpDriver` | Modbus UDP | 可用 |
+| `ModbusRtuDriver` | Modbus RTU | 待 NModbus 更新 |
+| `ModbusAsciiDriver` | Modbus ASCII | 待 NModbus 更新 |
+
 ## 安装
 
 ```bash
@@ -126,6 +136,30 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 | cpu | S71200 | CpuType |
 
 示例：`host:192.168.1.1;port:102;rack:0;slot:1;cpu:S71500`
+
+**Modbus TCP / UDP**
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| host | 127.0.0.1 | 设备地址 |
+| port | 502 | 端口 |
+| slaveid | 1 | 从站 ID |
+| timeout | 3000 | 超时 (ms) |
+
+示例：`host:10.0.0.1;port:502;slaveid:2`
+
+**Modbus RTU / ASCII**（待 NModbus 更新）
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| host | - | 串口号（COM3） |
+| baudrate | 9600 | 波特率 |
+| parity | None | 校验（None/Odd/Even） |
+| databits | 8 | 数据位 |
+| stopbits | One | 停止位（One/Two） |
+| slaveid | 1 | 从站 ID |
+
+示例：`host:COM3;baudrate:19200;parity:Even;slaveid:1`
 
 ## 配置
 
