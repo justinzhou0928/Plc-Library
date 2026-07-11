@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace PlcLibrary.DriverDomain.Interfaces
 {
-    /// <summary>协议驱动抽象。实现类需同时实现 <see cref="IDisposable"/>。</summary>
+    /// <summary>协议驱动抽象，通过 <see cref="IAsyncDisposable"/> 释放资源。</summary>
     public interface IProtocolDriver : IAsyncDisposable
     {
         DriverStatus DriverStatus { get; }

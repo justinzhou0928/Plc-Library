@@ -1,14 +1,9 @@
-using Microsoft.Extensions.Logging;
-using Moq;
 using PlcLibrary.General.Configuration;
-using System.ComponentModel.DataAnnotations;
 
 namespace PlcLibrary.Tests.General;
 
 public class DeviceConfigurationValidationTests
 {
-    private readonly Mock<ILogger> _logger = new();
-
     private static DeviceConfiguration ValidDevice() => new()
     {
         Id = "plc-01",
@@ -20,56 +15,56 @@ public class DeviceConfigurationValidationTests
     [Fact]
     public void Validate_AllFieldsValid_ReturnsTrue()
     {
-        Assert.True(ValidDevice().Validate(_logger.Object));
+        Assert.True(ValidDevice().Validate(out _));
     }
 
     [Fact]
     public void Validate_EmptyId_ReturnsFalse()
     {
         var d = ValidDevice() with { Id = "" };
-        Assert.False(d.Validate(_logger.Object));
+        Assert.False(d.Validate(out _));
     }
 
     [Fact]
     public void Validate_WhitespaceId_ReturnsFalse()
     {
         var d = ValidDevice() with { Id = "   " };
-        Assert.False(d.Validate(_logger.Object));
+        Assert.False(d.Validate(out _));
     }
 
     [Fact]
     public void Validate_EmptyProtocol_ReturnsFalse()
     {
         var d = ValidDevice() with { Protocol = "" };
-        Assert.False(d.Validate(_logger.Object));
+        Assert.False(d.Validate(out _));
     }
 
     [Fact]
     public void Validate_EmptyConnectionString_ReturnsFalse()
     {
         var d = ValidDevice() with { ConnectionString = "" };
-        Assert.False(d.Validate(_logger.Object));
+        Assert.False(d.Validate(out _));
     }
 
     [Fact]
     public void Validate_ZeroCollectionInterval_ReturnsFalse()
     {
         var d = ValidDevice() with { CollectionInterval = TimeSpan.Zero };
-        Assert.False(d.Validate(_logger.Object));
+        Assert.False(d.Validate(out _));
     }
 
     [Fact]
     public void Validate_NegativeCollectionInterval_ReturnsFalse()
     {
         var d = ValidDevice() with { CollectionInterval = TimeSpan.FromSeconds(-1) };
-        Assert.False(d.Validate(_logger.Object));
+        Assert.False(d.Validate(out _));
     }
 
     [Fact]
     public void Validate_EmptyTagPoints_ReturnsFalse()
     {
         var d = ValidDevice() with { TagPoints = [] };
-        Assert.False(d.Validate(_logger.Object));
+        Assert.False(d.Validate(out _));
     }
 
     [Fact]
@@ -79,7 +74,7 @@ public class DeviceConfigurationValidationTests
         {
             TagPoints = [new TagPointConfiguration { TagId = "", Address = "DB1.DBD0" }]
         };
-        Assert.False(d.Validate(_logger.Object));
+        Assert.False(d.Validate(out _));
     }
 
     [Fact]
@@ -89,6 +84,14 @@ public class DeviceConfigurationValidationTests
         {
             TagPoints = [new TagPointConfiguration { TagId = "tag1", Address = "" }]
         };
-        Assert.False(d.Validate(_logger.Object));
+        Assert.False(d.Validate(out _));
+    }
+
+    [Fact]
+    public void Validate_ReturnsErrorsForInvalidFields()
+    {
+        var d = ValidDevice() with { Id = "", Protocol = "" };
+        Assert.False(d.Validate(out var errors));
+        Assert.NotEmpty(errors);
     }
 }

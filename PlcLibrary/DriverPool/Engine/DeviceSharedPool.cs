@@ -8,8 +8,8 @@ using PlcLibrary.General.Configuration;
 using Polly;
 using Polly.Registry;
 using System;
+using System.Collections.Concurrent;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 
 namespace PlcLibrary.DriverPool.Engine
@@ -19,28 +19,25 @@ namespace PlcLibrary.DriverPool.Engine
         DeviceConfiguration device,
         IDriverFactory factory,
         PoolOptions options,
-        ResiliencePipelineRegistry<string> registry) : IDisposable, IAsyncDisposable
+        ResiliencePipelineRegistry<string> registry) : IAsyncDisposable
     {
+        private const string PoolPipelinePrefix = "Pool";
+
         private readonly ResiliencePipeline _pipeline =
-            registry.GetOrAddPipeline($"{PipelineKey.Pool}:{device.Id}", builder => builder.AddPoolStrategies(options));
+            registry.GetOrAddPipeline($"{PoolPipelinePrefix}:{device.Id}", builder => builder.AddPoolStrategies(options));
         private readonly SemaphoreSlim _semaphore = new(options.MaxConnectionsPerDevice, options.MaxConnectionsPerDevice);
-        private readonly Channel<IProtocolDriver> _idle = Channel.CreateBounded<IProtocolDriver>(
-            new BoundedChannelOptions(options.MaxConnectionsPerDevice)
-            {
-                FullMode = BoundedChannelFullMode.DropWrite,
-                SingleReader = false,
-                SingleWriter = false,
-            });
+        private readonly ConcurrentQueue<IProtocolDriver> _idle = new();
 
         public async ValueTask<IProtocolDriver> AcquireAsync(CancellationToken ct)
         {
             IProtocolDriver? driver = null;
             if (!await _semaphore.WaitAsync(options.OperationTimeout, ct).ConfigureAwait(false))
-                throw new TimeoutException($"无法在 {options.OperationTimeout.TotalSeconds} 秒内获取设备 {device.Id} 的驱动连接");
+                throw new TimeoutException($"Unable to acquire driver for device '{device.Id}' within {options.OperationTimeout.TotalSeconds}s");
+
             try
             {
-                if (_idle.Reader.TryRead(out driver))
-                    PoolLog.LogReusingDriver(logger, device.Id, _idle.Reader.Count);
+                if (_idle.TryDequeue(out driver))
+                    PoolLog.LogReusingDriver(logger, device.Id, _idle.Count);
                 else
                 {
                     driver = await factory.CreateAsync(device, ct).ConfigureAwait(false);
@@ -70,25 +67,29 @@ namespace PlcLibrary.DriverPool.Engine
             }
         }
 
-        public void Return(IProtocolDriver driver)
+        public bool Return(IProtocolDriver driver)
         {
-            if (driver.DriverStatus == DriverStatus.Faulted || !_idle.Writer.TryWrite(driver))
-                _ = TryDisposeAsync(driver).AsTask();
-            else
-                PoolLog.LogDriverReturned(logger, device.Id, _idle.Reader.Count);
-            _semaphore.Release();
-        }
+            if (driver.DriverStatus == DriverStatus.Faulted)
+            {
+                _ = TryDisposeAsync(driver);
+                _semaphore.Release();
+                return false;
+            }
 
-        public void Dispose() => _semaphore.Dispose();
+            _idle.Enqueue(driver);
+            PoolLog.LogDriverReturned(logger, device.Id, _idle.Count);
+            _semaphore.Release();
+            return true;
+        }
 
         public async ValueTask DisposeAsync()
         {
-            while (_idle.Reader.TryRead(out var driver))
+            while (_idle.TryDequeue(out var driver))
                 await TryDisposeAsync(driver).ConfigureAwait(false);
             _semaphore.Dispose();
         }
 
-        private async ValueTask TryDisposeAsync(IProtocolDriver driver)
+        public async ValueTask TryDisposeAsync(IProtocolDriver driver)
         {
             try { await driver.DisposeAsync().ConfigureAwait(false); }
             catch (Exception ex) { PoolLog.LogDriverDisposeFailed(logger, ex, device.Id); }

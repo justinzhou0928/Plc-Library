@@ -23,7 +23,7 @@ namespace PlcLibrary.Extensions
                 .AddTimeout(options.OperationTimeout)
                 .AddCircuitBreaker(new CircuitBreakerStrategyOptions
                 {
-                    FailureRatio = 0.5,
+                    FailureRatio = options.CircuitBreakerFailureRatio,
                     MinimumThroughput = options.CircuitBreakerMinimumThroughput,
                     BreakDuration = options.CircuitBreakerDuration,
                     ShouldHandle = new PredicateBuilder()

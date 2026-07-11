@@ -52,11 +52,11 @@ var devices = new[]
 
 builder.Services
     .AddPlcLibrary()
-    .AddDriver<S7Driver>("S7")
+    .AddDriver<S7Driver>()
     .AddSingleton<IDataHandler, ConsoleHandler>();
 
 var host = builder.Build();
-await host.Services.GetRequiredService<ITaskScheduler>().ApplyDevicesAsync(devices);
+await host.Services.GetRequiredService<IDeviceScheduler>().ApplyDevicesAsync(devices);
 await host.RunAsync();
 
 internal sealed class ConsoleHandler(ILogger<ConsoleHandler> logger) : IDataHandler
@@ -75,7 +75,6 @@ internal sealed class ConsoleHandler(ILogger<ConsoleHandler> logger) : IDataHand
 ### 使用 JSON 配置
 
 ```csharp
-// 绑定 Options 到 appsettings.json
 builder.Services.AddPlcLibrary();
 builder.Services.Configure<PoolOptions>(builder.Configuration.GetSection("DriverPool"));
 builder.Services.Configure<PipelineOptions>(builder.Configuration.GetSection("Pipeline"));
@@ -100,7 +99,7 @@ builder.Services.Configure<PipelineOptions>(builder.Configuration.GetSection("Pi
 ```
 
 ```csharp
-internal sealed class DeviceLoader(IConfiguration config, ITaskScheduler scheduler) : BackgroundService
+internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler scheduler) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -140,6 +139,7 @@ internal sealed class DeviceLoader(IConfiguration config, ITaskScheduler schedul
     "RetryDelay": "00:00:01",
     "CircuitBreakerMinimumThroughput": 5,
     "CircuitBreakerDuration": "00:00:30",
+    "CircuitBreakerFailureRatio": 0.5,
     "OperationTimeout": "00:00:10"
   }
 }
@@ -163,10 +163,10 @@ internal sealed class DeviceLoader(IConfiguration config, ITaskScheduler schedul
 
 | 接口 | 说明 |
 |------|------|
-| `ITaskScheduler` | 推送设备配置，差量 reconcile |
+| `IDeviceScheduler` | 推送设备配置，差量 reconcile |
 | `IDataHandler` | 接收采集推送 |
 | `IDeviceAccessor` | 主动读写设备 |
-| `IProtocolDriver` | 协议驱动实现 |
+| `IProtocolDriver` | 协议驱动实现（开发文档见 [DEVELOPMENT.md](./DEVELOPMENT.md)） |
 | `IDriverFactory` | 驱动工厂（通常用 `AddDriver<T>` 替代） |
 | `IDataPipeline` | 数据管道（通常不需要直接使用） |
 
@@ -189,40 +189,6 @@ public class MyService(IDeviceAccessor accessor)
         await accessor.WriteAsync(device, points);
     }
 }
-```
-
-## 自定义驱动
-
-实现 `IProtocolDriver`、`IDisposable`、`IAsyncDisposable`：
-
-```csharp
-public sealed class ModbusDriver : IProtocolDriver, IDisposable, IAsyncDisposable
-{
-    public DriverStatus DriverStatus { get; private set; }
-
-    public Task ConnectAsync(CancellationToken ct = default) { ... }
-    public Task DisconnectAsync(CancellationToken ct = default) { ... }
-    public Task<bool> TryReconnectAsync(CancellationToken ct = default) { ... }
-    public Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default) { ... }
-    public Task<DriverResult[]> WriteAsync(IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default) { ... }
-    public void Dispose() { ... }
-    public ValueTask DisposeAsync() { ... }
-}
-```
-
-注册：
-
-```csharp
-services.AddDriver<ModbusDriver>("Modbus");
-```
-
-如果连接 Key 需要自定义（同 IP 不同端口共用池）：
-
-```csharp
-services.AddDriver<ModbusDriver>("Modbus", cs => {
-    var c = ModbusConfig.Parse(cs);
-    return $"{c.Host}:{c.Port}";
-});
 ```
 
 ## 许可证

@@ -8,29 +8,30 @@ using PlcLibrary.General.Configuration;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace PlcLibrary.Controller.Engine
 {
-    internal sealed class TaskScheduler(
-        IServiceProvider sp,
-        ILogger<TaskScheduler> logger,
-        IEnumerable<IDriverFactory> factories) : ITaskScheduler, IDisposable, IAsyncDisposable
+    internal sealed class TaskScheduler : IDeviceScheduler
     {
-        private readonly IReadOnlyDictionary<string, IDriverFactory> _factories =
-            factories.ToDictionary(f => f.ProtocolDriverName);
+        private readonly IServiceProvider _sp;
+        private readonly ILogger<TaskScheduler> _logger;
+        private readonly IReadOnlyDictionary<string, IDriverFactory> _factories;
         private readonly ConcurrentDictionary<string, TaskActuator> _actuators = new();
         private readonly ConcurrentDictionary<string, DeviceConfiguration> _activeConfigs = new();
         private readonly SemaphoreSlim _applyLock = new(1, 1);
 
-        public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
-
-        public async Task StopAsync(CancellationToken ct)
+        public TaskScheduler(
+            IServiceProvider sp,
+            ILogger<TaskScheduler> logger,
+            IEnumerable<IDriverFactory> factories)
         {
-            await Task.WhenAll(_actuators.Values.Select(a => a.StopAsync())).ConfigureAwait(false);
-            ControllerLog.LogSchedulerStopped(logger);
+            _sp = sp;
+            _logger = logger;
+            _factories = factories.ToDictionary(f => f.ProtocolDriverName);
         }
 
         public async Task ApplyDevicesAsync(IReadOnlyList<DeviceConfiguration> devices, CancellationToken ct = default)
@@ -42,10 +43,10 @@ namespace PlcLibrary.Controller.Engine
                 foreach (var d in devices)
                 {
                     if (!d.Enabled) continue;
-                    if (!d.Validate(logger)) continue;
+                    if (!d.Validate(out var errors)) { LogValidationErrors(d.Id, errors); continue; }
                     if (!_factories.ContainsKey(d.Protocol))
                     {
-                        ControllerLog.LogProtocolUnregistered(logger, d.Id, d.Protocol);
+                        ControllerLog.LogProtocolUnregistered(_logger, d.Id, d.Protocol);
                         continue;
                     }
                     desired[d.Id] = d;
@@ -65,7 +66,7 @@ namespace PlcLibrary.Controller.Engine
                     {
                         await StartActuatorAsync(device).ConfigureAwait(false);
                     }
-                    else if (_activeConfigs.TryGetValue(id, out var old) && !old.Equals(device))
+                    else if (_activeConfigs.TryGetValue(id, out var old) && HasSignificantChange(old, device))
                     {
                         await StopActuatorAsync(id).ConfigureAwait(false);
                         await StartActuatorAsync(device).ConfigureAwait(false);
@@ -78,13 +79,24 @@ namespace PlcLibrary.Controller.Engine
             }
         }
 
+        internal async Task StopSchedulerAsync()
+        {
+            await Task.WhenAll(_actuators.Values.Select(a => a.StopAsync())).ConfigureAwait(false);
+            ControllerLog.LogSchedulerStopped(_logger);
+        }
+
+        internal void DisposeResources()
+        {
+            _applyLock.Dispose();
+        }
+
         private async Task StartActuatorAsync(DeviceConfiguration device)
         {
-            var actuator = ActivatorUtilities.CreateInstance<TaskActuator>(sp, device);
+            var actuator = ActivatorUtilities.CreateInstance<TaskActuator>(_sp, device);
             _actuators[device.Id] = actuator;
             _activeConfigs[device.Id] = device;
             await actuator.StartAsync().ConfigureAwait(false);
-            ControllerLog.LogTaskStarted(logger, device.Id, device.Protocol, device.CollectionInterval);
+            ControllerLog.LogTaskStarted(_logger, device.Id, device.Protocol, device.CollectionInterval);
         }
 
         private async Task StopActuatorAsync(string deviceId)
@@ -95,7 +107,7 @@ namespace PlcLibrary.Controller.Engine
                 {
                     await actuator.StopAsync().ConfigureAwait(false);
                     await actuator.DisposeAsync().ConfigureAwait(false);
-                    ControllerLog.LogTaskStopped(logger, deviceId);
+                    ControllerLog.LogTaskStopped(_logger, deviceId);
                 }
                 finally
                 {
@@ -108,29 +120,37 @@ namespace PlcLibrary.Controller.Engine
             }
         }
 
-        public void Dispose()
+        private void LogValidationErrors(string deviceId, IReadOnlyList<ValidationResult> errors)
         {
-            foreach (var a in _actuators.Values)
-                a.Dispose();
-            _actuators.Clear();
-            _applyLock.Dispose();
+            foreach (var r in errors)
+                ControllerLog.LogDeviceValidationFailed(_logger, deviceId, r.ErrorMessage ?? "");
         }
 
-        public async ValueTask DisposeAsync()
-        {
-            await Task.WhenAll(_actuators.Values.Select(a => a.StopAsync())).ConfigureAwait(false);
-            foreach (var a in _actuators.Values)
-                await a.DisposeAsync().ConfigureAwait(false);
-            _actuators.Clear();
-            _applyLock.Dispose();
-        }
+        private static bool HasSignificantChange(DeviceConfiguration old, DeviceConfiguration device)
+            => old.Enabled != device.Enabled
+            || old.Protocol != device.Protocol
+            || old.ConnectionString != device.ConnectionString
+            || old.ConnectionTimeout != device.ConnectionTimeout
+            || old.CollectionInterval != device.CollectionInterval
+            || !old.TagPoints.SequenceEqual(device.TagPoints);
     }
 
-    internal sealed class TaskSchedulerHostedService(ITaskScheduler scheduler) : IHostedService
+    internal sealed class TaskSchedulerHost(IDeviceScheduler scheduler) : BackgroundService
     {
         private readonly TaskScheduler _scheduler = (TaskScheduler)scheduler;
 
-        public Task StartAsync(CancellationToken ct) => _scheduler.StartAsync(ct);
-        public Task StopAsync(CancellationToken ct) => _scheduler.StopAsync(ct);
+        protected override Task ExecuteAsync(CancellationToken ct) => Task.CompletedTask;
+
+        public override async Task StopAsync(CancellationToken ct)
+        {
+            await _scheduler.StopSchedulerAsync().ConfigureAwait(false);
+            await base.StopAsync(ct);
+        }
+
+        public override void Dispose()
+        {
+            _scheduler.DisposeResources();
+            base.Dispose();
+        }
     }
 }

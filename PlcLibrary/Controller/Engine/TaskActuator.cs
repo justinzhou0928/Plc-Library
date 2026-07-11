@@ -14,7 +14,7 @@ namespace PlcLibrary.Controller.Engine
         ILogger<TaskActuator> logger,
         DeviceConfiguration device,
         IDeviceAccessor accessor,
-        IDataPipeline pipeline) : IDisposable, IAsyncDisposable
+        IDataPipeline pipeline) : IAsyncDisposable
     {
         private readonly object _gate = new();
         private CancellationTokenSource? _cts;
@@ -46,6 +46,12 @@ namespace PlcLibrary.Controller.Engine
             catch (OperationCanceledException) { }
 
             lock (_gate) { _loopTask = null; }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await StopAsync().ConfigureAwait(false);
+            _cts?.Dispose();
         }
 
         private async Task ExecuteAsync(CancellationToken ct)
@@ -83,20 +89,6 @@ namespace PlcLibrary.Controller.Engine
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { ControllerLog.LogCollectionFailed(logger, ex, device.Id); }
             }
-        }
-
-        public void Dispose()
-        {
-            _cts?.Cancel();
-            _cts?.Dispose();
-            _cts = null;
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            await StopAsync().ConfigureAwait(false);
-            _cts?.Dispose();
-            _cts = null;
         }
     }
 }

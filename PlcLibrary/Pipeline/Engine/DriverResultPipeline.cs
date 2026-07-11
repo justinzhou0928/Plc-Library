@@ -17,7 +17,7 @@ using System.Threading.Tasks;
 
 namespace PlcLibrary.Pipeline.Engine
 {
-    public sealed class DriverResultPipeline : IDataPipeline, IDisposable, IAsyncDisposable
+    internal sealed class DriverResultPipeline : IDataPipeline
     {
         private readonly IServiceProvider _sp;
         private readonly ILogger<DriverResultPipeline> _logger;
@@ -25,7 +25,7 @@ namespace PlcLibrary.Pipeline.Engine
         private readonly ConcurrentDictionary<Guid, Channel<DriverResult>> _subscribers = new();
         private readonly SemaphoreSlim _handlerGate;
         private readonly TimeSpan _handlerTimeout;
-        private int _disposed;
+        private IDataHandler[] _handlers = [];
 
         public DriverResultPipeline(
             IServiceProvider sp,
@@ -45,10 +45,10 @@ namespace PlcLibrary.Pipeline.Engine
             _handlerTimeout = options.Value.HandlerTimeout;
         }
 
-        public async Task StartAsync(CancellationToken ct)
+        internal async Task ConsumeAsync(CancellationToken ct)
         {
-            var handlers = _sp.GetServices<IDataHandler>().ToArray();
-            PipelineLog.LogHandlersRegistered(_logger, handlers.Length);
+            _handlers = _sp.GetServices<IDataHandler>().ToArray();
+            PipelineLog.LogHandlersRegistered(_logger, _handlers.Length);
 
             try
             {
@@ -57,18 +57,22 @@ namespace PlcLibrary.Pipeline.Engine
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { PipelineLog.LogFanoutFailed(_logger, ex); }
-            finally
-            {
-                foreach (var (_, sub) in _subscribers)
-                    sub.Writer.TryComplete();
-                PipelineLog.LogPipelineStopped(_logger);
-            }
         }
 
-        public Task StopAsync(CancellationToken ct)
+        internal void StopConsuming()
         {
             _channel.Writer.TryComplete();
-            return Task.CompletedTask;
+            foreach (var (_, sub) in _subscribers)
+                sub.Writer.TryComplete();
+            PipelineLog.LogPipelineStopped(_logger);
+        }
+
+        internal void DisposeResources()
+        {
+            _channel.Writer.TryComplete();
+            foreach (var (_, sub) in _subscribers)
+                sub.Writer.TryComplete();
+            _handlerGate.Dispose();
         }
 
         public async ValueTask HandleAsync(DriverResult result, CancellationToken ct)
@@ -98,28 +102,9 @@ namespace PlcLibrary.Pipeline.Engine
             }
         }
 
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            _channel.Writer.TryComplete();
-            foreach (var (_, sub) in _subscribers)
-                sub.Writer.TryComplete();
-            _handlerGate.Dispose();
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            _channel.Writer.TryComplete();
-            foreach (var (_, sub) in _subscribers)
-                sub.Writer.TryComplete();
-            _handlerGate.Dispose();
-            await Task.CompletedTask;
-        }
-
         private async ValueTask DispatchAsync(DriverResult result, CancellationToken ct)
         {
-            var handlers = _sp.GetServices<IDataHandler>().ToArray();
+            var handlers = _handlers;
             if (handlers.Length > 0)
                 await Task.WhenAll(handlers.Select(h => InvokeHandlerAsync(h, result, ct))).ConfigureAwait(false);
 
@@ -135,8 +120,7 @@ namespace PlcLibrary.Pipeline.Engine
             await _handlerGate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeoutCts.CancelAfter(_handlerTimeout);
+                using var timeoutCts = new CancellationTokenSource(_handlerTimeout);
                 await handler.HandleAsync(result, timeoutCts.Token).ConfigureAwait(false);
             }
             catch (Exception ex) { PipelineLog.LogHandlerFailed(_logger, ex, handler.GetType().Name); }
@@ -144,9 +128,23 @@ namespace PlcLibrary.Pipeline.Engine
         }
     }
 
-    internal sealed class PipelineHostedService(IDataPipeline pipeline) : IHostedService
+    internal sealed class PipelineHost(IDataPipeline pipeline) : BackgroundService
     {
-        public Task StartAsync(CancellationToken ct) => pipeline.StartAsync(ct);
-        public Task StopAsync(CancellationToken ct) => pipeline.StopAsync(ct);
+        private readonly DriverResultPipeline _pipeline = (DriverResultPipeline)pipeline;
+
+        protected override async Task ExecuteAsync(CancellationToken ct)
+            => await _pipeline.ConsumeAsync(ct).ConfigureAwait(false);
+
+        public override async Task StopAsync(CancellationToken ct)
+        {
+            _pipeline.StopConsuming();
+            await base.StopAsync(ct);
+        }
+
+        public override void Dispose()
+        {
+            _pipeline.DisposeResources();
+            base.Dispose();
+        }
     }
 }

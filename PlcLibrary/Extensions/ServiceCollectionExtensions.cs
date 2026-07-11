@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using PlcLibrary.Controller.Engine;
 using PlcLibrary.Controller.Interfaces;
+using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverPool.Engine;
 using PlcLibrary.DriverPool.Models;
@@ -9,6 +10,7 @@ using PlcLibrary.Pipeline.Interfaces;
 using PlcLibrary.Pipeline.Models;
 using Polly.Registry;
 using System;
+using System.Reflection;
 
 namespace PlcLibrary.Extensions
 {
@@ -22,24 +24,27 @@ namespace PlcLibrary.Extensions
             services.AddSingleton<ResiliencePipelineRegistry<string>>();
 
             services.AddSingleton<IDeviceAccessor, DeviceDriverPool>();
-            services.AddSingleton<IDataPipeline, DriverResultPipeline>();
-            services.AddHostedService<PipelineHostedService>();
+            services.AddSingleton<IDeviceScheduler, TaskScheduler>();
+            services.AddHostedService<TaskSchedulerHost>();
 
-            services.AddSingleton<ITaskScheduler, TaskScheduler>();
-            services.AddHostedService<TaskSchedulerHostedService>();
+            services.AddSingleton<IDataPipeline, DriverResultPipeline>();
+            services.AddHostedService<PipelineHost>();
 
             return services;
         }
 
         public static IServiceCollection AddDriver<TDriver>(
             this IServiceCollection services,
-            string protocol,
             Func<string, string>? connectionKey = null)
             where TDriver : class, IProtocolDriver
         {
+            var name = typeof(TDriver).GetCustomAttribute<ProtocolDriverNameAttribute>()?.Name
+                ?? throw new InvalidOperationException(
+                    $"Driver type '{typeof(TDriver).FullName}' is missing [ProtocolDriverName] attribute.");
+
             services.AddSingleton<IDriverFactory>(sp =>
                 new GenericDriverFactory(
-                    protocol,
+                    name,
                     device => ActivatorUtilities.CreateInstance<TDriver>(sp, device),
                     connectionKey ?? (cs => cs)));
             return services;

@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace PlcLibrary.DriverDomain.Enums
+﻿namespace PlcLibrary.DriverDomain.Enums
 {
     public enum DriverStatus
     {

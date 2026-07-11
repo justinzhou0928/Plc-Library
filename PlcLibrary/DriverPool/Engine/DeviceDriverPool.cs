@@ -15,7 +15,7 @@ using System.Threading.Tasks;
 
 namespace PlcLibrary.DriverPool.Engine
 {
-    internal sealed class DeviceDriverPool : IDeviceAccessor, IDisposable, IAsyncDisposable
+    internal sealed class DeviceDriverPool : IDeviceAccessor, IAsyncDisposable
     {
         private readonly IReadOnlyDictionary<string, IDriverFactory> _factoriesByProtocol;
         private readonly ConcurrentDictionary<string, Lazy<DeviceSharedPool>> _pools = new();
@@ -59,23 +59,22 @@ namespace PlcLibrary.DriverPool.Engine
             if (TryGetPool(device, out var pool))
                 pool.Return(driver);
             else
-                _ = TryDisposeAsync(driver);
+                _ = DisposeDriverAsync(driver);
         }
 
-        public void Dispose()
+        private static async Task DisposeDriverAsync(IProtocolDriver driver)
         {
-            foreach (var (_, lazy) in _pools)
-            {
-                if (lazy.IsValueCreated)
-                    lazy.Value.Dispose();
-            }
-            _pools.Clear();
+            try { await driver.DisposeAsync().ConfigureAwait(false); }
+            catch { }
         }
 
         public async ValueTask DisposeAsync()
         {
             foreach (var (_, lazy) in _pools)
-                await lazy.Value.DisposeAsync().ConfigureAwait(false);
+            {
+                if (lazy.IsValueCreated)
+                    await lazy.Value.DisposeAsync().ConfigureAwait(false);
+            }
             _pools.Clear();
         }
 
@@ -106,12 +105,6 @@ namespace PlcLibrary.DriverPool.Engine
         {
             if (_factoriesByProtocol.TryGetValue(protocol, out var factory)) return factory;
             throw new InvalidOperationException($"No driver factory registered for protocol '{protocol}'.");
-        }
-
-        private static async ValueTask TryDisposeAsync(IProtocolDriver driver)
-        {
-            try { await driver.DisposeAsync().ConfigureAwait(false); }
-            catch { }
         }
     }
 }

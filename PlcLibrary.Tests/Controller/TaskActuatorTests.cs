@@ -24,18 +24,18 @@ public class TaskActuatorTests
     };
 
     [Fact]
-    public void StartAsync_FirstCall_ReturnsCompletedTask()
+    public async Task StartAsync_FirstCall_ReturnsCompletedTask()
     {
-        using var actuator = Create();
+        await using var actuator = Create();
         var result = actuator.StartAsync();
         Assert.True(result.IsCompleted);
     }
 
     [Fact]
-    public void StartAsync_DoubleCall_ReturnsImmediately()
+    public async Task StartAsync_DoubleCall_ReturnsImmediately()
     {
-        using var actuator = Create();
-        actuator.StartAsync();
+        await using var actuator = Create();
+        _ = actuator.StartAsync();
         var result = actuator.StartAsync();
         Assert.True(result.IsCompleted);
     }
@@ -43,39 +43,40 @@ public class TaskActuatorTests
     [Fact]
     public async Task StopAsync_BeforeStart_ReturnsImmediately()
     {
-        using var actuator = Create();
+        var actuator = Create();
         await actuator.StopAsync();
     }
 
     [Fact]
     public async Task StopAsync_AfterStart_Completes()
     {
-        using var actuator = Create();
-        actuator.StartAsync();
+        var actuator = Create();
+        _ = actuator.StartAsync();
         await actuator.StopAsync();
     }
 
     [Fact]
     public async Task StartStopStart_RestartWorks()
     {
-        using var actuator = Create();
-        actuator.StartAsync();
-        await actuator.StopAsync();
-        actuator.StartAsync();
-        await actuator.StopAsync();
-    }
-
-    [Fact]
-    public void Dispose_WithoutStart_DoesNotThrow()
-    {
         var actuator = Create();
-        actuator.Dispose();
+        _ = actuator.StartAsync();
+        await actuator.StopAsync();
+        _ = actuator.StartAsync();
+        await actuator.StopAsync();
     }
 
     [Fact]
     public async Task DisposeAsync_WithoutStart_DoesNotThrow()
     {
         var actuator = Create();
+        await actuator.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task DisposeAsync_AfterStart_StopsAndDisposes()
+    {
+        var actuator = Create();
+        _ = actuator.StartAsync();
         await actuator.DisposeAsync();
     }
 

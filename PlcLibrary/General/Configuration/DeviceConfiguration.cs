@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
@@ -31,29 +30,20 @@ namespace PlcLibrary.General.Configuration
         [MinLength(1)]
         public TagPointConfiguration[] TagPoints { get; init; } = [];
 
-        public bool Validate(ILogger logger)
+        public bool Validate(out IReadOnlyList<ValidationResult> errors)
         {
-            var valid = true;
-            var results = new List<ValidationResult>();
-            if (!Validator.TryValidateObject(this, new ValidationContext(this), results, true))
-            {
-                valid = false;
-                foreach (var r in results)
-                    ControllerLog.LogDeviceValidationFailed(logger, Id, r.ErrorMessage ?? "");
-            }
+            var list = new List<ValidationResult>();
+            Validator.TryValidateObject(this, new ValidationContext(this), list, true);
 
             foreach (var tag in TagPoints)
             {
                 var tagResults = new List<ValidationResult>();
                 if (!Validator.TryValidateObject(tag, new ValidationContext(tag), tagResults, true))
-                {
-                    valid = false;
-                    foreach (var r in tagResults)
-                        ControllerLog.LogDeviceValidationFailed(logger, Id, r.ErrorMessage ?? "");
-                }
+                    list.AddRange(tagResults);
             }
 
-            return valid;
+            errors = list;
+            return list.Count == 0;
         }
     }
 }

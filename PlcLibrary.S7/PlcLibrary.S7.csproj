@@ -16,6 +16,10 @@
 
   <ItemGroup>
     <PackageReference Include="S7netplus" Version="0.20.0" />
+    <PackageReference Include="PolySharp" Version="1.16.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <ProjectReference Include="..\PlcLibrary\PlcLibrary.csproj" />
   </ItemGroup>
 

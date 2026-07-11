@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
+using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
@@ -13,13 +14,14 @@ using System.Threading.Tasks;
 
 namespace PlcLibrary.S7
 {
-    public sealed class S7Driver : IProtocolDriver, IDisposable, IAsyncDisposable
+    [ProtocolDriverName("S7")]
+    public sealed class S7Driver : IProtocolDriver
     {
         private readonly ILogger<S7Driver>? _logger;
         private readonly S7DriverConfig _config;
-        private readonly object _gate = new();
         private Plc? _plc;
         private DriverStatus _status = DriverStatus.Disconnected;
+        private readonly object _stateLock = new();
 
         public S7Driver(DeviceConfiguration device)
         {
@@ -33,14 +35,13 @@ namespace PlcLibrary.S7
 
         public DriverStatus DriverStatus
         {
-            get { lock (_gate) return _status; }
-            private set { lock (_gate) _status = value; }
+            get { lock (_stateLock) return _status; }
         }
 
         public async Task ConnectAsync(CancellationToken ct = default)
         {
             await DisconnectAsync(ct).ConfigureAwait(false);
-            DriverStatus = DriverStatus.Connecting;
+            SetState(null, DriverStatus.Connecting);
 
             var plc = new Plc(_config.CpuType, _config.Host, _config.Port, _config.Rack, _config.Slot)
             {
@@ -49,17 +50,20 @@ namespace PlcLibrary.S7
             };
             await plc.OpenAsync(ct).ConfigureAwait(false);
 
-            lock (_gate) _plc = plc;
-            DriverStatus = DriverStatus.Connected;
+            SetState(plc, DriverStatus.Connected);
         }
 
         public Task DisconnectAsync(CancellationToken ct = default)
         {
-            Plc? plc;
-            lock (_gate) { plc = _plc; _plc = null; }
-            try { plc?.Close(); }
+            Plc? old;
+            lock (_stateLock)
+            {
+                old = _plc;
+                _plc = null;
+                _status = DriverStatus.Disconnected;
+            }
+            try { old?.Close(); }
             catch { }
-            DriverStatus = DriverStatus.Disconnected;
             return Task.CompletedTask;
         }
 
@@ -71,53 +75,57 @@ namespace PlcLibrary.S7
                 await ConnectAsync(ct).ConfigureAwait(false);
                 return true;
             }
-            catch (Exception ex) when (ExceptionIsNotCancellation(ex))
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                DriverStatus = DriverStatus.Faulted;
+                lock (_stateLock) _status = DriverStatus.Faulted;
                 return false;
             }
         }
 
-        private static bool ExceptionIsNotCancellation(Exception ex) => ex is not OperationCanceledException;
         public async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             var plc = GetPlcOrThrow();
             if (points.Length == 0) return [];
 
-            var batchItems = new List<(int Index, DataItem Item)>(points.Length);
-            var fallbackIndices = new List<int>();
+            var batchItems = new List<DataItem>(points.Length);
+            var batchIndices = new List<int>(points.Length);
+            var fallback = new bool[points.Length];
             var results = new DriverResult[points.Length];
 
             for (var i = 0; i < points.Length; i++)
             {
-                try { batchItems.Add((i, DataItem.FromAddress(points[i].Address))); }
+                try
+                {
+                    batchItems.Add(DataItem.FromAddress(points[i].Address));
+                    batchIndices.Add(i);
+                }
                 catch (OperationCanceledException) { throw; }
-                catch { fallbackIndices.Add(i); }
+                catch { fallback[i] = true; }
             }
 
             if (batchItems.Count > 0)
             {
-                var items = batchItems.Select(b => b.Item).ToList();
-                try { await plc.ReadMultipleVarsAsync(items, ct).ConfigureAwait(false); }
+                try { await plc.ReadMultipleVarsAsync(batchItems, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { throw; }
                 catch
                 {
-                    foreach (var (index, _) in batchItems)
-                        fallbackIndices.Add(index);
+                    foreach (var idx in batchIndices)
+                        fallback[idx] = true;
                 }
 
                 for (var j = 0; j < batchItems.Count; j++)
                 {
-                    var (index, _) = batchItems[j];
-                    if (fallbackIndices.Contains(index)) continue;
-                    results[index] = items[j].Value is not null
-                        ? DriverResult.Good(points[index].Address, items[j].Value)
-                        : DriverResult.Bad(points[index].Address, QualityCode.BadCommFailure, "读取返回 null");
+                    var index = batchIndices[j];
+                    if (fallback[index]) continue;
+                    results[index] = batchItems[j].Value is not null
+                        ? DriverResult.Good(points[index].Address, batchItems[j].Value)
+                        : DriverResult.Bad(points[index].Address, QualityCode.BadCommFailure, "Read returned null");
                 }
             }
 
-            foreach (var i in fallbackIndices)
+            for (var i = 0; i < fallback.Length; i++)
             {
+                if (!fallback[i]) continue;
                 ct.ThrowIfCancellationRequested();
                 try
                 {
@@ -144,16 +152,24 @@ namespace PlcLibrary.S7
             {
                 try
                 {
-                    var pairs = values.ToList();
-                    var dataItems = pairs.Select(kv =>
+                    var count = values.Count;
+                    var addresses = new string[count];
+                    var dataItems = new DataItem[count];
+                    var idx = 0;
+                    foreach (var kv in values)
                     {
+                        addresses[idx] = kv.Key.Address;
                         var item = DataItem.FromAddress(kv.Key.Address);
                         item.Value = kv.Value;
-                        return item;
-                    }).ToArray();
+                        dataItems[idx++] = item;
+                    }
 
                     await plc.WriteAsync(dataItems).ConfigureAwait(false);
-                    return pairs.Select(kv => DriverResult.Good(kv.Key.Address, null)).ToArray();
+
+                    var dr = new DriverResult[count];
+                    for (var i = 0; i < count; i++)
+                        dr[i] = DriverResult.Good(addresses[i], null);
+                    return dr;
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { if (_logger is not null) S7Log.LogBatchWriteFallback(_logger, ex); }
@@ -178,23 +194,28 @@ namespace PlcLibrary.S7
             return results;
         }
 
-        public void Dispose()
+        public async ValueTask DisposeAsync()
         {
-            Plc? plc;
-            lock (_gate) { plc = _plc; _plc = null; }
-            try { plc?.Close(); }
-            catch { }
+            await DisconnectAsync().ConfigureAwait(false);
         }
 
-        public ValueTask DisposeAsync() => new(DisconnectAsync());
+        private void SetState(Plc? plc, DriverStatus status)
+        {
+            lock (_stateLock)
+            {
+                _plc = plc;
+                _status = status;
+            }
+        }
 
         private Plc GetPlcOrThrow()
         {
-            Plc? plc;
-            lock (_gate) plc = _plc;
-            if (plc is null || DriverStatus != DriverStatus.Connected)
-                throw new InvalidOperationException("S7 驱动未连接");
-            return plc;
+            lock (_stateLock)
+            {
+                if (_plc is null || _status != DriverStatus.Connected)
+                    throw new InvalidOperationException("S7 driver is not connected");
+                return _plc;
+            }
         }
     }
 }

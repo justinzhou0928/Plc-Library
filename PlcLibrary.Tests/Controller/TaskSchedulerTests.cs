@@ -55,17 +55,17 @@ public class TaskSchedulerTests
     }
 
     [Fact]
-    public async Task DisposeAsync_DoesNotThrow()
+    public async Task StopSchedulerAsync_EmptyActuators_DoesNotThrow()
     {
         var scheduler = Create();
-        await scheduler.DisposeAsync();
+        await scheduler.StopSchedulerAsync();
     }
 
     [Fact]
-    public void Dispose_DoesNotThrow()
+    public void DisposeResources_DoesNotThrow()
     {
         var scheduler = Create();
-        scheduler.Dispose();
+        scheduler.DisposeResources();
     }
 
     private TaskScheduler Create()
