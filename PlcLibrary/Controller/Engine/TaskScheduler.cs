@@ -81,7 +81,12 @@ namespace PlcLibrary.Controller.Engine
 
         internal async Task StopSchedulerAsync()
         {
-            await Task.WhenAll(_actuators.Values.Select(a => a.StopAsync())).ConfigureAwait(false);
+            var values = _actuators.Values;
+            var tasks = new Task[values.Count];
+            var i = 0;
+            foreach (var a in values)
+                tasks[i++] = a.StopAsync();
+            await Task.WhenAll(tasks).ConfigureAwait(false);
             ControllerLog.LogSchedulerStopped(_logger);
         }
 

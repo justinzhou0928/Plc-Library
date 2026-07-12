@@ -26,7 +26,6 @@ namespace PlcLibrary.Modbus
         {
             await DisconnectAsync(ct).ConfigureAwait(false);
             lock (_stateLock) _status = DriverStatus.Connected;
-            await Task.CompletedTask;
         }
 
         public Task DisconnectAsync(CancellationToken ct = default)
@@ -50,7 +49,7 @@ namespace PlcLibrary.Modbus
             }
         }
 
-        public Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
+        public async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             var results = new DriverResult[points.Length];
@@ -60,7 +59,7 @@ namespace PlcLibrary.Modbus
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    results[i] = ReadSingle(points[i]);
+                    results[i] = await ReadSingleAsync(points[i], ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
@@ -70,10 +69,10 @@ namespace PlcLibrary.Modbus
                 }
             }
 
-            return Task.FromResult(results);
+            return results;
         }
 
-        public Task<DriverResult[]> WriteAsync(
+        public async Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -85,7 +84,7 @@ namespace PlcLibrary.Modbus
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    WriteSingle(kvp.Key, kvp.Value);
+                    await WriteSingleAsync(kvp.Key, kvp.Value, ct).ConfigureAwait(false);
                     results[i] = DriverResult.Good(kvp.Key.Address, null);
                 }
                 catch (OperationCanceledException) { throw; }
@@ -97,7 +96,7 @@ namespace PlcLibrary.Modbus
                 i++;
             }
 
-            return Task.FromResult(results);
+            return results;
         }
 
         public async ValueTask DisposeAsync()
@@ -107,7 +106,7 @@ namespace PlcLibrary.Modbus
             ModbusLog.LogDriverDisposed(logger);
         }
 
-        private DriverResult ReadSingle(TagPointConfiguration point)
+        private async Task<DriverResult> ReadSingleAsync(TagPointConfiguration point, CancellationToken ct)
         {
             if (!TryParseAddress(point.Address, out var type, out var offset))
             {
@@ -117,15 +116,15 @@ namespace PlcLibrary.Modbus
 
             return type switch
             {
-                ModbusType.Coil => ReadCoil(offset),
-                ModbusType.DiscreteInput => ReadDiscreteInput(offset),
-                ModbusType.InputRegister => ReadInputRegister(offset),
-                ModbusType.HoldingRegister => ReadHoldingRegister(offset),
+                ModbusType.Coil => await ReadCoilAsync(offset, ct).ConfigureAwait(false),
+                ModbusType.DiscreteInput => await ReadDiscreteInputAsync(offset, ct).ConfigureAwait(false),
+                ModbusType.InputRegister => await ReadInputRegisterAsync(offset, ct).ConfigureAwait(false),
+                ModbusType.HoldingRegister => await ReadHoldingRegisterAsync(offset, ct).ConfigureAwait(false),
                 _ => DriverResult.Bad(point.Address, QualityCode.BadConfigError, $"Unknown type for: {point.Address}"),
             };
         }
 
-        private void WriteSingle(TagPointConfiguration point, object value)
+        private async Task WriteSingleAsync(TagPointConfiguration point, object value, CancellationToken ct)
         {
             if (!TryParseAddress(point.Address, out var type, out var offset))
                 throw new InvalidOperationException($"Invalid Modbus address: {point.Address}");
@@ -133,43 +132,43 @@ namespace PlcLibrary.Modbus
             switch (type)
             {
                 case ModbusType.Coil:
-                    master.WriteSingleCoilAsync(_slaveId, offset, Convert.ToBoolean(value)).GetAwaiter().GetResult();
+                    await master.WriteSingleCoilAsync(_slaveId, offset, Convert.ToBoolean(value)).ConfigureAwait(false);
                     break;
                 case ModbusType.HoldingRegister:
-                    master.WriteSingleRegisterAsync(_slaveId, offset, Convert.ToUInt16(value)).GetAwaiter().GetResult();
+                    await master.WriteSingleRegisterAsync(_slaveId, offset, Convert.ToUInt16(value)).ConfigureAwait(false);
                     break;
                 default:
                     throw new InvalidOperationException($"Write not supported for {type} at {point.Address}");
             }
         }
 
-        private DriverResult ReadCoil(ushort offset)
+        private async Task<DriverResult> ReadCoilAsync(ushort offset, CancellationToken ct)
         {
-            var values = master.ReadCoilsAsync(_slaveId, offset, 1).GetAwaiter().GetResult();
+            var values = await master.ReadCoilsAsync(_slaveId, offset, 1).ConfigureAwait(false);
             return values.Length > 0
                 ? DriverResult.Good(offset.ToString(), values[0])
                 : DriverResult.Bad(offset.ToString(), QualityCode.BadCommFailure, "Empty response");
         }
 
-        private DriverResult ReadDiscreteInput(ushort offset)
+        private async Task<DriverResult> ReadDiscreteInputAsync(ushort offset, CancellationToken ct)
         {
-            var values = master.ReadInputsAsync(_slaveId, offset, 1).GetAwaiter().GetResult();
+            var values = await master.ReadInputsAsync(_slaveId, offset, 1).ConfigureAwait(false);
             return values.Length > 0
                 ? DriverResult.Good(offset.ToString(), values[0])
                 : DriverResult.Bad(offset.ToString(), QualityCode.BadCommFailure, "Empty response");
         }
 
-        private DriverResult ReadInputRegister(ushort offset)
+        private async Task<DriverResult> ReadInputRegisterAsync(ushort offset, CancellationToken ct)
         {
-            var values = master.ReadInputRegistersAsync(_slaveId, offset, 1).GetAwaiter().GetResult();
+            var values = await master.ReadInputRegistersAsync(_slaveId, offset, 1).ConfigureAwait(false);
             return values.Length > 0
                 ? DriverResult.Good(offset.ToString(), values[0])
                 : DriverResult.Bad(offset.ToString(), QualityCode.BadCommFailure, "Empty response");
         }
 
-        private DriverResult ReadHoldingRegister(ushort offset)
+        private async Task<DriverResult> ReadHoldingRegisterAsync(ushort offset, CancellationToken ct)
         {
-            var values = master.ReadHoldingRegistersAsync(_slaveId, offset, 1).GetAwaiter().GetResult();
+            var values = await master.ReadHoldingRegistersAsync(_slaveId, offset, 1).ConfigureAwait(false);
             return values.Length > 0
                 ? DriverResult.Good(offset.ToString(), values[0])
                 : DriverResult.Bad(offset.ToString(), QualityCode.BadCommFailure, "Empty response");
@@ -206,13 +205,6 @@ namespace PlcLibrary.Modbus
                 default:
                     return false;
             }
-        }
-        public enum ModbusType
-        {
-            Coil,
-            DiscreteInput,
-            InputRegister,
-            HoldingRegister,
         }
     }
 }

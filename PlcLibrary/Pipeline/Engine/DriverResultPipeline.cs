@@ -106,7 +106,12 @@ namespace PlcLibrary.Pipeline.Engine
         {
             var handlers = _handlers;
             if (handlers.Length > 0)
-                await Task.WhenAll(handlers.Select(h => InvokeHandlerAsync(h, result, ct))).ConfigureAwait(false);
+            {
+                var tasks = new Task[handlers.Length];
+                for (var i = 0; i < handlers.Length; i++)
+                    tasks[i] = InvokeHandlerAsync(handlers[i], result, ct);
+                await Task.WhenAll(tasks).ConfigureAwait(false);
+            }
 
             if (!_subscribers.IsEmpty)
             {
@@ -120,8 +125,9 @@ namespace PlcLibrary.Pipeline.Engine
             await _handlerGate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                using var timeoutCts = new CancellationTokenSource(_handlerTimeout);
-                await handler.HandleAsync(result, timeoutCts.Token).ConfigureAwait(false);
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                linkedCts.CancelAfter(_handlerTimeout);
+                await handler.HandleAsync(result, linkedCts.Token).ConfigureAwait(false);
             }
             catch (Exception ex) { PipelineLog.LogHandlerFailed(_logger, ex, handler.GetType().Name); }
             finally { _handlerGate.Release(); }
