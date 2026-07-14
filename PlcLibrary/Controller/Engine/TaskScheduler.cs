@@ -100,26 +100,12 @@ namespace PlcLibrary.Controller.Engine
             _applyLock.Dispose();
         }
 
-        internal SchedulerHealthStatus GetHealthStatus()
-        {
-            var count = _actuators.Count;
-            if (count == 0)
-                return new SchedulerHealthStatus { IsHealthy = true, ActiveDeviceCount = 0 };
-
-            return new SchedulerHealthStatus
-            {
-                IsHealthy = true,
-                ActiveDeviceCount = count,
-            };
-        }
-
         private async Task StartActuatorAsync(DeviceConfiguration device, CancellationToken ct)
         {
             var factory = _factories[device.Protocol];
 
             var collector = factory.SupportsPush
-                ? await factory.TryCreateCollectorAsync(device, _pipeline, _sp, ct).ConfigureAwait(false)
-                  ?? CreatePollingCollector(device)
+                ? await CreatePushCollectorAsync(factory, device, ct).ConfigureAwait(false)
                 : CreatePollingCollector(device);
 
             var actuator = ActivatorUtilities.CreateInstance<TaskActuator>(_sp, device, collector);
@@ -127,6 +113,14 @@ namespace PlcLibrary.Controller.Engine
             _activeConfigs[device.Id] = device;
             await actuator.StartAsync().ConfigureAwait(false);
             ControllerLog.LogTaskStarted(_logger, device.Id, device.Protocol, device.CollectionInterval);
+        }
+
+        private async Task<IDeviceCollector> CreatePushCollectorAsync(
+            IDriverFactory factory, DeviceConfiguration device, CancellationToken ct)
+        {
+            var driver = await factory.CreateAsync(device, ct).ConfigureAwait(false);
+            return ActivatorUtilities.CreateInstance<PushCollector>(
+                _sp, (IPushProtocolDriver)driver, device, _pipeline);
         }
 
         private PollingCollector CreatePollingCollector(DeviceConfiguration device)

@@ -30,7 +30,6 @@ public class DeviceDriverPoolTests
     {
         _options.Setup(o => o.Value).Returns(new PoolOptions { MaxConnectionsPerDevice = 1 });
         _factory.Setup(f => f.ProtocolDriverName).Returns("Test");
-        _factory.Setup(f => f.GetConnectionKey(It.IsAny<string>())).Returns((string cs) => cs);
     }
 
     [Fact]
@@ -106,7 +105,6 @@ public class DeviceDriverPoolTests
 
         var pool = CreatePool();
         var device2 = _device with { ConnectionString = "host:10.0.0.1;port:502" };
-        _factory.Setup(f => f.GetConnectionKey(device2.ConnectionString)).Returns(device2.ConnectionString);
 
         await pool.ReadAsync(_device, _device.TagPoints, CancellationToken.None);
         await pool.ReadAsync(device2, device2.TagPoints, CancellationToken.None);

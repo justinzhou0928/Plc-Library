@@ -318,13 +318,6 @@ public sealed class ModbusDriver(ILogger<ModbusDriver> logger, DeviceConfigurati
 ```csharp
 // 协议名从 [ProtocolDriverName] 属性自动获取
 builder.Services.AddDriver<ModbusDriver>();
-
-// 自定义连接池分组键（同 IP 不同端口可共用池）
-builder.Services.AddDriver<ModbusDriver>(cs =>
-{
-    var c = ModbusDriverConfig.Parse(cs);
-    return $"{c.Host}:{c.Port}";
-});
 ```
 
 ## 接口参考
@@ -409,17 +402,6 @@ flowchart LR
 - **断路器**：连续 5 次操作中失败率 ≥ 50% 触发熔断 30 秒，触发/半开/恢复均有日志输出
 
 每设备独立的 Pipeline 键为 `Pool:{device.Id}`，故障隔离。
-
-## 健康检查
-
-框架内置 `IHealthCheck`，注入 `Microsoft.Extensions.Diagnostics.HealthChecks` 即可使用：
-
-```csharp
-builder.Services.AddHealthChecks()
-    .AddCheck<PlcLibraryHealthCheck>("plc-library");
-```
-
-返回数据包含 `ActiveDevices`（活跃设备数）和 `PoolCount`（连接池数）。
 
 ## 连接超时覆盖
 

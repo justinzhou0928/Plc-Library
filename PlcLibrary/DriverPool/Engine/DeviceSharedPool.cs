@@ -22,7 +22,7 @@ namespace PlcLibrary.DriverPool.Engine
         ResiliencePipelineRegistry<string> registry) : IAsyncDisposable
     {
         private readonly ResiliencePipeline _pipeline =
-            registry.GetOrAddPipeline($"{PipelineKey.Pool}:{device.Id}",
+            registry.GetOrAddPipeline(ResiliencePipelineKeys.Pool(device.Id),
                 builder => builder.AddPoolStrategies(options, logger, device.Id));
         private readonly SemaphoreSlim _semaphore = new(options.MaxConnectionsPerDevice, options.MaxConnectionsPerDevice);
         private readonly ConcurrentQueue<IProtocolDriver> _idle = new();

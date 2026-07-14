@@ -15,6 +15,7 @@ PLC 数据采集库，提供连接池管理、定时采集调度、数据分发�
 | `S7Driver` | Siemens S7 (S7-200/300/400/1200/1500) | 可用 |
 | `ModbusTcpDriver` | Modbus TCP | 可用 |
 | `ModbusUdpDriver` | Modbus UDP | 可用 |
+| `OpcUaDriver` | OPC UA | 可用 |
 | `ModbusRtuDriver` | Modbus RTU | 待 NModbus 更新 |
 | `ModbusAsciiDriver` | Modbus ASCII | 待 NModbus 更新 |
 
@@ -24,10 +25,12 @@ PLC 数据采集库，提供连接池管理、定时采集调度、数据分发�
 dotnet add package PlcLibrary
 ```
 
-S7 驱动额外引用：
+按需添加驱动包：
 
 ```bash
 dotnet add package PlcLibrary.S7
+dotnet add package PlcLibrary.Modbus
+dotnet add package PlcLibrary.OpcUa
 ```
 
 ## 快速开始
@@ -161,6 +164,21 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 
 示例：`host:COM3;baudrate:19200;parity:Even;slaveid:1`
 
+**OPC UA**
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| endpoint | opc.tcp://localhost:4840 | 服务器端点 |
+| username | - | 用户名（可选） |
+| password | - | 密码（可选） |
+| security | None | None / Sign / SignAndEncrypt |
+| timeout | 5000 | 超时 (ms) |
+| publishinginterval | 1000 | 订阅发布间隔 (ms) |
+| sessiontimeout | 60000 | 会话超时 (ms) |
+| autoacceptcertificate | true | 自动接受证书 |
+
+示例：`endpoint:opc.tcp://10.0.0.1:4840;security:None;timeout:10000`
+
 ## 配置
 
 ### 驱动池
@@ -224,17 +242,6 @@ public class MyService(IDeviceAccessor accessor)
     }
 }
 ```
-
-### 健康检查
-
-框架注入 `IHealthCheck`，标准 ASP.NET Core 健康检查端点可直接使用：
-
-```csharp
-builder.Services.AddHealthChecks()
-    .AddCheck<PlcLibraryHealthCheck>("plc-library");
-```
-
-输出 `ActiveDevices` 和 `PoolCount` 指标。
 
 ### 设备级连接超时
 

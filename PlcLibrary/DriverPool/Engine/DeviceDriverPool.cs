@@ -78,13 +78,10 @@ namespace PlcLibrary.DriverPool.Engine
             _pools.Clear();
         }
 
-        internal int PoolCount => _pools.Count(kvp => kvp.Value.IsValueCreated);
-
         private DeviceSharedPool GetOrCreatePool(DeviceConfiguration device)
         {
             var factory = ResolveFactory(device.Protocol);
-            var key = factory.GetConnectionKey(device.ConnectionString);
-            return _pools.GetOrAdd(key,
+            return _pools.GetOrAdd(device.ConnectionString,
                 _ => new Lazy<DeviceSharedPool>(
                     () => new DeviceSharedPool(
                         _loggerFactory.CreateLogger<DeviceSharedPool>(), device, factory, _options, _pipelineRegistry),
@@ -94,7 +91,7 @@ namespace PlcLibrary.DriverPool.Engine
         private bool TryGetPool(DeviceConfiguration device, [NotNullWhen(true)] out DeviceSharedPool? pool)
         {
             if (_factoriesByProtocol.TryGetValue(device.Protocol, out var factory)
-                && _pools.TryGetValue(factory.GetConnectionKey(device.ConnectionString), out var lazy))
+                && _pools.TryGetValue(device.ConnectionString, out var lazy))
             {
                 pool = lazy.Value;
                 return true;

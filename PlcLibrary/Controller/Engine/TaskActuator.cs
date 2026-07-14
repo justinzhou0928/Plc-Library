@@ -5,21 +5,13 @@ using System.Threading.Tasks;
 
 namespace PlcLibrary.Controller.Engine
 {
-    internal sealed class TaskActuator : IAsyncDisposable
+    internal sealed class TaskActuator(DeviceConfiguration device, IDeviceCollector collector) : IAsyncDisposable
     {
-        private readonly DeviceConfiguration _device;
-        private readonly IDeviceCollector _collector;
         private readonly object _gate = new();
         private CancellationTokenSource? _cts;
         private Task? _loopTask;
 
-        public TaskActuator(DeviceConfiguration device, IDeviceCollector collector)
-        {
-            _device = device;
-            _collector = collector;
-        }
-
-        public DeviceConfiguration Device => _device;
+        public DeviceConfiguration Device => device;
 
         public Task StartAsync()
         {
@@ -55,13 +47,13 @@ namespace PlcLibrary.Controller.Engine
         {
             await StopAsync().ConfigureAwait(false);
             _cts?.Dispose();
-            try { await _collector.DisposeAsync().ConfigureAwait(false); }
+            try { await collector.DisposeAsync().ConfigureAwait(false); }
             catch { }
         }
 
         private async Task ExecuteAsync(CancellationToken ct)
         {
-            try { await _collector.ExecuteAsync(ct).ConfigureAwait(false); }
+            try { await collector.ExecuteAsync(ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { }
         }
     }

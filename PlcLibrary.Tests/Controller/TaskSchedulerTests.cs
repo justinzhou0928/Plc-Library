@@ -74,7 +74,6 @@ public class TaskSchedulerTests
     {
         _factory.Setup(f => f.ProtocolDriverName).Returns("S7");
         _factory.Setup(f => f.SupportsPush).Returns(false);
-        _factory.Setup(f => f.GetConnectionKey(It.IsAny<string>())).Returns((string cs) => cs);
         return new TaskScheduler(_sp.Object, _logger, [_factory.Object], _pipeline.Object);
     }
 }

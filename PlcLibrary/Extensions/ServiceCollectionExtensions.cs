@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PlcLibrary.Controller.Collectors;
 using PlcLibrary.Controller.Engine;
@@ -9,6 +8,7 @@ using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverPool.Engine;
 using PlcLibrary.DriverPool.Models;
+using PlcLibrary.General.Configuration;
 using PlcLibrary.Pipeline.Engine;
 using PlcLibrary.Pipeline.Interfaces;
 using PlcLibrary.Pipeline.Models;
@@ -55,15 +55,10 @@ namespace PlcLibrary.Extensions
             services.AddTransient<PollingCollector>();
             services.AddTransient<TaskActuator>();
 
-            services.AddHealthChecks()
-                .AddCheck<General.PlcLibraryHealthCheck>("plc-library");
-
             return services;
         }
 
-        public static IServiceCollection AddDriver<TDriver>(
-            this IServiceCollection services,
-            Func<string, string>? connectionKey = null)
+        public static IServiceCollection AddDriver<TDriver>(this IServiceCollection services)
             where TDriver : class, IProtocolDriver
         {
             var name = typeof(TDriver).GetCustomAttribute<ProtocolDriverNameAttribute>()?.Name
@@ -73,14 +68,11 @@ namespace PlcLibrary.Extensions
             var supportsPush = typeof(IPushProtocolDriver).IsAssignableFrom(typeof(TDriver));
 
             services.AddSingleton<IDriverFactory>(sp =>
-                new GenericDriverFactory(
-                    name,
-                    device => ActivatorUtilities.CreateInstance<TDriver>(sp, device),
-                    connectionKey ?? (cs => cs),
-                    supportsPush,
-                    sp.GetRequiredService<ResiliencePipelineRegistry<string>>(),
-                    sp.GetRequiredService<IOptions<PoolOptions>>(),
-                    sp.GetRequiredService<ILoggerFactory>()));
+            {
+                Func<DeviceConfiguration, IProtocolDriver> create = device =>
+                    ActivatorUtilities.CreateInstance<TDriver>(sp, device);
+                return ActivatorUtilities.CreateInstance<GenericDriverFactory>(sp, name, create, supportsPush);
+            });
 
             return services;
         }

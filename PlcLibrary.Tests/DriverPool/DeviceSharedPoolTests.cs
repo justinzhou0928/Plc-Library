@@ -26,7 +26,6 @@ public class DeviceSharedPoolTests
     public DeviceSharedPoolTests()
     {
         _factory.Setup(f => f.ProtocolDriverName).Returns("Test");
-        _factory.Setup(f => f.GetConnectionKey(It.IsAny<string>())).Returns((string cs) => cs);
     }
 
     [Fact]

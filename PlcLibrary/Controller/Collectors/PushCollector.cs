@@ -1,12 +1,16 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using PlcLibrary.Controller.Engine;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
+using PlcLibrary.DriverPool.Models;
+using PlcLibrary.Extensions;
 using PlcLibrary.General;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.Pipeline.Interfaces;
 using Polly;
+using Polly.Registry;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -27,15 +31,19 @@ namespace PlcLibrary.Controller.Collectors
         public PushCollector(
             IPushProtocolDriver driver,
             DeviceConfiguration device,
-            ResiliencePipeline resilience,
             IDataPipeline pipeline,
-            ILogger<PushCollector> logger)
+            ILogger<PushCollector> logger,
+            ResiliencePipelineRegistry<string> pipelineRegistry,
+            IOptions<PoolOptions> poolOptions,
+            ILoggerFactory loggerFactory)
         {
             _driver = driver;
             _device = device;
-            _resilience = resilience;
             _pipeline = pipeline;
             _logger = logger;
+            _resilience = pipelineRegistry.GetOrAddPipeline(
+                ResiliencePipelineKeys.Push(device.Id),
+                builder => builder.AddPoolStrategies(poolOptions.Value, loggerFactory.CreateLogger("PushCollector"), device.Id));
             _addressToTag = device.TagPoints
                 .Where(p => !string.IsNullOrEmpty(p.Address))
                 .ToDictionary(p => p.Address, p => p.TagId, StringComparer.OrdinalIgnoreCase);
