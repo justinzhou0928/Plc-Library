@@ -15,5 +15,9 @@ namespace PlcLibrary.General.Configuration
         public string Address { get; init; } = string.Empty;
 
         public string DataType { get; init; } = string.Empty;
+
+        public int SamplingInterval { get; init; }
+
+        public int QueueSize { get; init; } = 1;
     }
 }

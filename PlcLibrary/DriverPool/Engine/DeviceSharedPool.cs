@@ -22,15 +22,17 @@ namespace PlcLibrary.DriverPool.Engine
         ResiliencePipelineRegistry<string> registry) : IAsyncDisposable
     {
         private readonly ResiliencePipeline _pipeline =
-            registry.GetOrAddPipeline($"{PipelineKey.Pool}:{device.Id}", builder => builder.AddPoolStrategies(options));
+            registry.GetOrAddPipeline($"{PipelineKey.Pool}:{device.Id}",
+                builder => builder.AddPoolStrategies(options, logger, device.Id));
         private readonly SemaphoreSlim _semaphore = new(options.MaxConnectionsPerDevice, options.MaxConnectionsPerDevice);
         private readonly ConcurrentQueue<IProtocolDriver> _idle = new();
 
         public async ValueTask<IProtocolDriver> AcquireAsync(CancellationToken ct)
         {
             IProtocolDriver? driver = null;
-            if (!await _semaphore.WaitAsync(options.OperationTimeout, ct).ConfigureAwait(false))
-                throw new TimeoutException($"Unable to acquire driver for device '{device.Id}' within {options.OperationTimeout.TotalSeconds}s");
+            var acquireTimeout = device.ConnectionTimeout > TimeSpan.Zero ? device.ConnectionTimeout : options.OperationTimeout;
+            if (!await _semaphore.WaitAsync(acquireTimeout, ct).ConfigureAwait(false))
+                throw new TimeoutException($"Unable to acquire driver for device '{device.Id}' within {acquireTimeout.TotalSeconds}s");
 
             try
             {

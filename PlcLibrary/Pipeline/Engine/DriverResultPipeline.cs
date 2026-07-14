@@ -23,7 +23,7 @@ namespace PlcLibrary.Pipeline.Engine
         private readonly ILogger<DriverResultPipeline> _logger;
         private readonly Channel<DriverResult> _channel;
         private readonly ConcurrentDictionary<Guid, Channel<DriverResult>> _subscribers = new();
-        private readonly SemaphoreSlim _handlerGate;
+        private readonly ParallelOptions _parallelOptions;
         private readonly TimeSpan _handlerTimeout;
         private IDataHandler[] _handlers = [];
 
@@ -41,11 +41,14 @@ namespace PlcLibrary.Pipeline.Engine
                     SingleReader = true,
                     SingleWriter = false,
                 });
-            _handlerGate = new SemaphoreSlim(Math.Max(1, options.Value.MaxHandlerParallelism));
+            _parallelOptions = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = options.Value.MaxHandlerParallelism,
+            };
             _handlerTimeout = options.Value.HandlerTimeout;
         }
 
-        internal async Task ConsumeAsync(CancellationToken ct)
+        public async Task ConsumeAsync(CancellationToken ct)
         {
             _handlers = _sp.GetServices<IDataHandler>().ToArray();
             PipelineLog.LogHandlersRegistered(_logger, _handlers.Length);
@@ -72,7 +75,6 @@ namespace PlcLibrary.Pipeline.Engine
             _channel.Writer.TryComplete();
             foreach (var (_, sub) in _subscribers)
                 sub.Writer.TryComplete();
-            _handlerGate.Dispose();
         }
 
         public async ValueTask HandleAsync(DriverResult result, CancellationToken ct)
@@ -107,50 +109,27 @@ namespace PlcLibrary.Pipeline.Engine
             var handlers = _handlers;
             if (handlers.Length > 0)
             {
-                var tasks = new Task[handlers.Length];
-                for (var i = 0; i < handlers.Length; i++)
-                    tasks[i] = InvokeHandlerAsync(handlers[i], result, ct);
-                await Task.WhenAll(tasks).ConfigureAwait(false);
+                _parallelOptions.CancellationToken = ct;
+                await Parallel.ForEachAsync(handlers, _parallelOptions, async (handler, token) =>
+                {
+                    try
+                    {
+                        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                        linkedCts.CancelAfter(_handlerTimeout);
+                        await handler.HandleAsync(result, linkedCts.Token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) { PipelineLog.LogHandlerFailed(_logger, ex, handler.GetType().Name); }
+                }).ConfigureAwait(false);
             }
 
             if (!_subscribers.IsEmpty)
             {
                 foreach (var (_, sub) in _subscribers)
-                    sub.Writer.TryWrite(result);
+                {
+                    if (!sub.Writer.TryWrite(result))
+                        PipelineLog.LogSubscriberDropped(_logger, result.Address);
+                }
             }
-        }
-
-        private async Task InvokeHandlerAsync(IDataHandler handler, DriverResult result, CancellationToken ct)
-        {
-            await _handlerGate.WaitAsync(ct).ConfigureAwait(false);
-            try
-            {
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                linkedCts.CancelAfter(_handlerTimeout);
-                await handler.HandleAsync(result, linkedCts.Token).ConfigureAwait(false);
-            }
-            catch (Exception ex) { PipelineLog.LogHandlerFailed(_logger, ex, handler.GetType().Name); }
-            finally { _handlerGate.Release(); }
-        }
-    }
-
-    internal sealed class PipelineHost(IDataPipeline pipeline) : BackgroundService
-    {
-        private readonly DriverResultPipeline _pipeline = (DriverResultPipeline)pipeline;
-
-        protected override async Task ExecuteAsync(CancellationToken ct)
-            => await _pipeline.ConsumeAsync(ct).ConfigureAwait(false);
-
-        public override async Task StopAsync(CancellationToken ct)
-        {
-            _pipeline.StopConsuming();
-            await base.StopAsync(ct);
-        }
-
-        public override void Dispose()
-        {
-            _pipeline.DisposeResources();
-            base.Dispose();
         }
     }
 }

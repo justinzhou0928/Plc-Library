@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.General.Configuration;
+using PlcLibrary.Pipeline.Interfaces;
 using TaskScheduler = PlcLibrary.Controller.Engine.TaskScheduler;
 
 namespace PlcLibrary.Tests.Controller;
@@ -13,6 +14,7 @@ public class TaskSchedulerTests
     private readonly Mock<IServiceProvider> _sp = new();
     private readonly ILogger<TaskScheduler> _logger = NullLogger<TaskScheduler>.Instance;
     private readonly Mock<IDriverFactory> _factory = new();
+    private readonly Mock<IDataPipeline> _pipeline = new();
 
     private static DeviceConfiguration ValidDevice(string id, string protocol = "S7") => new()
     {
@@ -71,7 +73,8 @@ public class TaskSchedulerTests
     private TaskScheduler Create()
     {
         _factory.Setup(f => f.ProtocolDriverName).Returns("S7");
+        _factory.Setup(f => f.SupportsPush).Returns(false);
         _factory.Setup(f => f.GetConnectionKey(It.IsAny<string>())).Returns((string cs) => cs);
-        return new TaskScheduler(_sp.Object, _logger, [_factory.Object]);
+        return new TaskScheduler(_sp.Object, _logger, [_factory.Object], _pipeline.Object);
     }
 }

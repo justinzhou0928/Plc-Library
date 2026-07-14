@@ -10,7 +10,7 @@ namespace PlcLibrary.Modbus
     public sealed class ModbusTcpDriver : ModbusDriverBase
     {
         public ModbusTcpDriver(ILogger<ModbusTcpDriver> logger, DeviceConfiguration device)
-            : base(logger, ModbusDriverConfig.Parse(device.ConnectionString), CreateMaster(device.ConnectionString)) { }
+            : base(logger, ModbusDriverConfig.Parse(device.ConnectionString), () => CreateMaster(device.ConnectionString)) { }
 
         private static IModbusMaster CreateMaster(string connectionString)
         {

@@ -28,5 +28,17 @@ namespace PlcLibrary.General
         [LoggerMessage(Level = LogLevel.Warning,
         Message = "驱动释放失败。Device={DeviceId}")]
         internal static partial void LogDriverDisposeFailed(ILogger logger, Exception ex, string deviceId);
+
+        [LoggerMessage(Level = LogLevel.Warning,
+        Message = "断路器熔断。Device={DeviceId}，恢复等待 {BreakDuration}")]
+        internal static partial void LogCircuitBreakerOpened(ILogger logger, string deviceId, TimeSpan breakDuration);
+
+        [LoggerMessage(Level = LogLevel.Information,
+        Message = "断路器半开，尝试恢复连接。Device={DeviceId}")]
+        internal static partial void LogCircuitBreakerHalfOpened(ILogger logger, string deviceId);
+
+        [LoggerMessage(Level = LogLevel.Information,
+        Message = "断路器已关闭，连接恢复正常。Device={DeviceId}")]
+        internal static partial void LogCircuitBreakerClosed(ILogger logger, string deviceId);
     }
 }

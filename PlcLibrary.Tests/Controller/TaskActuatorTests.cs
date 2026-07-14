@@ -1,17 +1,18 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using PlcLibrary.Controller.Collectors;
+using PlcLibrary.Controller.Engine;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.Pipeline.Interfaces;
-using TaskActuator = PlcLibrary.Controller.Engine.TaskActuator;
 
 namespace PlcLibrary.Tests.Controller;
 
 public class TaskActuatorTests
 {
-    private readonly ILogger<TaskActuator> _logger = NullLogger<TaskActuator>.Instance;
+    private readonly ILogger<PollingCollector> _pollerLogger = NullLogger<PollingCollector>.Instance;
     private readonly Mock<IDeviceAccessor> _accessor = new();
     private readonly Mock<IDataPipeline> _pipeline = new();
     private readonly DeviceConfiguration _device = new()
@@ -80,5 +81,9 @@ public class TaskActuatorTests
         await actuator.DisposeAsync();
     }
 
-    private TaskActuator Create() => new(_logger, _device, _accessor.Object, _pipeline.Object);
+    private TaskActuator Create()
+    {
+        var collector = new PollingCollector(_pollerLogger, _device, _accessor.Object, _pipeline.Object);
+        return new TaskActuator(_device, collector);
+    }
 }

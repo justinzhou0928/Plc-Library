@@ -185,7 +185,7 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 {
   "Pipeline": {
     "Capacity": 10000,
-    "MaxHandlerParallelism": 4,
+    "MaxHandlerParallelism": 8,
     "HandlerTimeout": "00:00:30"
   }
 }
@@ -224,6 +224,23 @@ public class MyService(IDeviceAccessor accessor)
     }
 }
 ```
+
+### 健康检查
+
+框架注入 `IHealthCheck`，标准 ASP.NET Core 健康检查端点可直接使用：
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddCheck<PlcLibraryHealthCheck>("plc-library");
+```
+
+输出 `ActiveDevices` 和 `PoolCount` 指标。
+
+### 设备级连接超时
+
+`DeviceConfiguration.ConnectionTimeout` 可覆盖全局 `PoolOptions.OperationTimeout`，在获取驱动时优先使用设备级配置。默认 `TimeSpan.Zero` 表示使用全局配置。
+
+断路器状态变更（熔断/半开/恢复）通过 `ILogger` 输出 `Warning`/`Information` 级别日志，每设备独立隔离。
 
 ## 许可证
 

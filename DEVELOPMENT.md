@@ -71,16 +71,23 @@ internal sealed class TaskScheduler : IDeviceScheduler
     public async Task ApplyDevicesAsync(...) { /* 差量 reconcile */ }
     internal async Task StopSchedulerAsync() { /* 停止所有 TaskActuator */ }
     internal void DisposeResources() { /* 释放 SemaphoreSlim */ }
+    internal SchedulerHealthStatus GetHealthStatus() { /* 健康状态 */ }
 }
 
-internal sealed class TaskSchedulerHost(IDeviceScheduler scheduler) : BackgroundService
+internal sealed class TaskSchedulerHost(TaskScheduler scheduler) : BackgroundService
 {
     protected override Task ExecuteAsync(CancellationToken ct) => Task.CompletedTask;
 
     public override async Task StopAsync(CancellationToken ct)
     {
-        await ((TaskScheduler)_scheduler).StopSchedulerAsync();
+        await scheduler.StopSchedulerAsync();
         await base.StopAsync(ct);
+    }
+
+    public override void Dispose()
+    {
+        scheduler.DisposeResources();
+        base.Dispose();
     }
 }
 ```
@@ -88,15 +95,16 @@ internal sealed class TaskSchedulerHost(IDeviceScheduler scheduler) : Background
 - `ApplyDevicesAsync` — 差量 reconcile：对比当前与目标设备列表，新增/更新/移除对应的 `TaskActuator`
 - `TaskSchedulerHost.StopAsync` — 宿主关闭时停止所有 `TaskActuator`
 
-`TaskActuator` 每个设备一个实例，内部 `while + Task.Delay` 采集循环：
+`TaskActuator` 每个设备一个实例，内部使用 `PeriodicTimer` 驱动采集循环：
 
 ```csharp
 // 伪代码
-while (!ct.IsCancellationRequested)
+using var timer = new PeriodicTimer(device.CollectionInterval);
+while (await timer.WaitForNextTickAsync(ct))
 {
-    await Task.Delay(interval, ct);
     var results = await accessor.ReadAsync(device, points, ct);
-    await pipeline.HandleAsync(result, ct);
+    foreach (var r in results)
+        await pipeline.HandleAsync(r with { DeviceId = device.Id, TagId = ... }, ct);
 }
 ```
 
@@ -135,14 +143,27 @@ flowchart TD
 internal sealed class DriverResultPipeline : IDataPipeline
 {
     public ValueTask HandleAsync(DriverResult result, CancellationToken ct);
-    internal async Task ConsumeAsync(CancellationToken ct) { /* await foreach channel */ }
+    public async Task ConsumeAsync(CancellationToken ct) { /* await foreach channel */ }
     internal void StopConsuming() { /* channel.Writer.TryComplete */ }
+    internal void DisposeResources() { /* 释放 Channel + Subscriber */ }
 }
 
-internal sealed class PipelineHost(IDataPipeline pipeline) : BackgroundService
+internal sealed class PipelineHost(DriverResultPipeline pipeline) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
-        => await ((DriverResultPipeline)pipeline).ConsumeAsync(ct);
+        => await pipeline.ConsumeAsync(ct);
+
+    public override async Task StopAsync(CancellationToken ct)
+    {
+        pipeline.StopConsuming();
+        await base.StopAsync(ct);
+    }
+
+    public override void Dispose()
+    {
+        pipeline.DisposeResources();
+        base.Dispose();
+    }
 }
 ```
 
@@ -161,8 +182,9 @@ flowchart LR
 
 特性：
 - 背压控制：`BoundedChannelFullMode.Wait`，消费者跟不上则阻塞生产者
-- Handler 并行度：`SemaphoreSlim(MaxHandlerParallelism)` 限制并发
-- Handler 超时：每个 Handler 独立 `CancellationTokenSource(HandlerTimeout)`
+- Handler 并行度：`Parallel.ForEachAsync` + `MaxDegreeOfParallelism` 控制并发，各 Handler 公平调度
+- Handler 超时：每个 Handler 独立 `CancellationTokenSource.CancelAfter(HandlerTimeout)`
+- 订阅通道背压告警：`IDataPipeline.ReadAsync` 的 sub Channel 满时 `DropOldest` 并记录日志
 
 ## 编写自定义驱动
 
@@ -373,8 +395,6 @@ public readonly record struct DriverResult
 
 策略层级：
 
-策略层级：
-
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
 flowchart LR
@@ -386,6 +406,21 @@ flowchart LR
 
 - **重试**：`OperationCanceledException` 不重试，其他异常指数退避重试最多 3 次
 - **超时**：单次连接操作不超过 10 秒
-- **断路器**：连续 5 次操作中失败率 ≥ 50% 触发熔断 30 秒
+- **断路器**：连续 5 次操作中失败率 ≥ 50% 触发熔断 30 秒，触发/半开/恢复均有日志输出
 
 每设备独立的 Pipeline 键为 `Pool:{device.Id}`，故障隔离。
+
+## 健康检查
+
+框架内置 `IHealthCheck`，注入 `Microsoft.Extensions.Diagnostics.HealthChecks` 即可使用：
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddCheck<PlcLibraryHealthCheck>("plc-library");
+```
+
+返回数据包含 `ActiveDevices`（活跃设备数）和 `PoolCount`（连接池数）。
+
+## 连接超时覆盖
+
+`DeviceConfiguration.ConnectionTimeout` 可覆盖全局 `PoolOptions.OperationTimeout`，在 `AcquireAsync` 获取驱动时优先使用设备级超时。默认 `TimeSpan.Zero` 表示使用全局配置。`DeviceSharedPool` 的 Polly 弹性管线也按设备独立创建，断路器回调通过 `ILogger` 输出状态变更（熔断/半开/恢复）。

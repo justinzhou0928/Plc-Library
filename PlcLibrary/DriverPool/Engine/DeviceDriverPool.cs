@@ -78,6 +78,8 @@ namespace PlcLibrary.DriverPool.Engine
             _pools.Clear();
         }
 
+        internal int PoolCount => _pools.Count(kvp => kvp.Value.IsValueCreated);
+
         private DeviceSharedPool GetOrCreatePool(DeviceConfiguration device)
         {
             var factory = ResolveFactory(device.Protocol);

@@ -1,10 +1,12 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using PlcLibrary.Controller.Collectors;
 using PlcLibrary.Controller.Interfaces;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.General;
 using PlcLibrary.General.Configuration;
+using PlcLibrary.Pipeline.Interfaces;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -20,6 +22,7 @@ namespace PlcLibrary.Controller.Engine
         private readonly IServiceProvider _sp;
         private readonly ILogger<TaskScheduler> _logger;
         private readonly IReadOnlyDictionary<string, IDriverFactory> _factories;
+        private readonly IDataPipeline _pipeline;
         private readonly ConcurrentDictionary<string, TaskActuator> _actuators = new();
         private readonly ConcurrentDictionary<string, DeviceConfiguration> _activeConfigs = new();
         private readonly SemaphoreSlim _applyLock = new(1, 1);
@@ -27,11 +30,13 @@ namespace PlcLibrary.Controller.Engine
         public TaskScheduler(
             IServiceProvider sp,
             ILogger<TaskScheduler> logger,
-            IEnumerable<IDriverFactory> factories)
+            IEnumerable<IDriverFactory> factories,
+            IDataPipeline pipeline)
         {
             _sp = sp;
             _logger = logger;
             _factories = factories.ToDictionary(f => f.ProtocolDriverName);
+            _pipeline = pipeline;
         }
 
         public async Task ApplyDevicesAsync(IReadOnlyList<DeviceConfiguration> devices, CancellationToken ct = default)
@@ -64,12 +69,12 @@ namespace PlcLibrary.Controller.Engine
                     ct.ThrowIfCancellationRequested();
                     if (!_actuators.TryGetValue(id, out _))
                     {
-                        await StartActuatorAsync(device).ConfigureAwait(false);
+                        await StartActuatorAsync(device, ct).ConfigureAwait(false);
                     }
                     else if (_activeConfigs.TryGetValue(id, out var old) && HasSignificantChange(old, device))
                     {
                         await StopActuatorAsync(id).ConfigureAwait(false);
-                        await StartActuatorAsync(device).ConfigureAwait(false);
+                        await StartActuatorAsync(device, ct).ConfigureAwait(false);
                     }
                 }
             }
@@ -95,14 +100,37 @@ namespace PlcLibrary.Controller.Engine
             _applyLock.Dispose();
         }
 
-        private async Task StartActuatorAsync(DeviceConfiguration device)
+        internal SchedulerHealthStatus GetHealthStatus()
         {
-            var actuator = ActivatorUtilities.CreateInstance<TaskActuator>(_sp, device);
+            var count = _actuators.Count;
+            if (count == 0)
+                return new SchedulerHealthStatus { IsHealthy = true, ActiveDeviceCount = 0 };
+
+            return new SchedulerHealthStatus
+            {
+                IsHealthy = true,
+                ActiveDeviceCount = count,
+            };
+        }
+
+        private async Task StartActuatorAsync(DeviceConfiguration device, CancellationToken ct)
+        {
+            var factory = _factories[device.Protocol];
+
+            var collector = factory.SupportsPush
+                ? await factory.TryCreateCollectorAsync(device, _pipeline, _sp, ct).ConfigureAwait(false)
+                  ?? CreatePollingCollector(device)
+                : CreatePollingCollector(device);
+
+            var actuator = ActivatorUtilities.CreateInstance<TaskActuator>(_sp, device, collector);
             _actuators[device.Id] = actuator;
             _activeConfigs[device.Id] = device;
             await actuator.StartAsync().ConfigureAwait(false);
             ControllerLog.LogTaskStarted(_logger, device.Id, device.Protocol, device.CollectionInterval);
         }
+
+        private PollingCollector CreatePollingCollector(DeviceConfiguration device)
+            => ActivatorUtilities.CreateInstance<PollingCollector>(_sp, device);
 
         private async Task StopActuatorAsync(string deviceId)
         {
@@ -140,9 +168,9 @@ namespace PlcLibrary.Controller.Engine
             || !old.TagPoints.SequenceEqual(device.TagPoints);
     }
 
-    internal sealed class TaskSchedulerHost(IDeviceScheduler scheduler) : BackgroundService
+    internal sealed class TaskSchedulerHost(TaskScheduler scheduler) : BackgroundService
     {
-        private readonly TaskScheduler _scheduler = (TaskScheduler)scheduler;
+        private readonly TaskScheduler _scheduler = scheduler;
 
         protected override Task ExecuteAsync(CancellationToken ct) => Task.CompletedTask;
 

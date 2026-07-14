@@ -167,7 +167,28 @@ namespace PlcLibrary.S7
                     return dr;
                 }
                 catch (OperationCanceledException) { throw; }
-                catch (Exception ex) { S7Log.LogBatchWriteFallback(logger, ex); }
+                catch (Exception ex)
+                {
+                    S7Log.LogBatchWriteFallback(logger, ex);
+                    var fallback = new DriverResult[values.Count];
+                    var idx = 0;
+                    foreach (var kvp in values)
+                    {
+                        try
+                        {
+                            await plc.WriteAsync(kvp.Key.Address, kvp.Value, ct).ConfigureAwait(false);
+                            fallback[idx] = DriverResult.Good(kvp.Key.Address, null);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception perEx)
+                        {
+                            S7Log.LogWritePointFailed(logger, perEx, kvp.Key.Address);
+                            fallback[idx] = DriverResult.Bad(kvp.Key.Address, QualityCode.BadCommFailure, perEx.Message);
+                        }
+                        idx++;
+                    }
+                    return fallback;
+                }
             }
 
             var results = new DriverResult[values.Count];
