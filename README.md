@@ -151,6 +151,17 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 
 示例：`host:10.0.0.1;port:502;slaveid:2`
 
+**Modbus 地址格式**：使用 5 位十进制数字前缀标记数据类型：
+
+| 前缀 | 类型 | 读写 | 示例 | 说明 |
+|------|------|:--:|------|------|
+| `0xxxx` | Coil | 读写 | `00001` | 线圈，布尔量 |
+| `1xxxx` | Discrete Input | 只读 | `10042` | 离散输入，布尔量 |
+| `3xxxx` | Input Register | 只读 | `30001` | 输入寄存器，16 位无符号整数 |
+| `4xxxx` | Holding Register | 读写 | `40042` | 保持寄存器，16 位无符号整数 |
+
+地址为 **1-based**（PLC 习惯），驱动内部自动转换为 0-based 偏移。连续地址自动合并为单次批量读写。
+
 **Modbus RTU / ASCII**（待 NModbus 更新）
 
 | 字段 | 默认值 | 说明 |
@@ -215,7 +226,7 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 
 | 接口 | 说明 |
 |------|------|
-| `IDeviceScheduler` | 推送设备配置，差量 reconcile |
+| `IDeviceScheduler` | 推送设备配置，差量 reconcile；`GetDeviceHealthAsync()` 查询运行状态 |
 | `IDataHandler` | 接收采集推送 |
 | `IDeviceAccessor` | 主动读写设备 |
 | `IProtocolDriver` | 协议驱动实现（开发文档见 [DEVELOPMENT.md](./DEVELOPMENT.md)） |
@@ -248,6 +259,18 @@ public class MyService(IDeviceAccessor accessor)
 `DeviceConfiguration.ConnectionTimeout` 可覆盖全局 `PoolOptions.OperationTimeout`，在获取驱动时优先使用设备级配置。默认 `TimeSpan.Zero` 表示使用全局配置。
 
 断路器状态变更（熔断/半开/恢复）通过 `ILogger` 输出 `Warning`/`Information` 级别日志，每设备独立隔离。
+
+### 健康状态
+
+```csharp
+var scheduler = host.Services.GetRequiredService<IDeviceScheduler>();
+var health = await scheduler.GetDeviceHealthAsync();
+
+foreach (var d in health)
+    Console.WriteLine($"{d.DeviceId} [{d.Protocol}] {(d.IsRunning ? "OK" : d.Error)}");
+```
+
+返回 `IReadOnlyList<DeviceHealthInfo>`，每个设备包含 `DeviceId`、`Protocol`、`IsRunning`、`Error` 和 `UpdatedAt`。
 
 ## 许可证
 

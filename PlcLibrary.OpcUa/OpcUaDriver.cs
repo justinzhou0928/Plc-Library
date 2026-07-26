@@ -24,7 +24,7 @@ namespace PlcLibrary.OpcUa
         private Session? _session;
         private IList<Subscription>? _subscriptions;
         private DriverStatus _status = DriverStatus.Disconnected;
-        private bool _disposed;
+        private int _disposed;
 
         public OpcUaDriver(ILogger<OpcUaDriver> logger, DeviceConfiguration device)
         {
@@ -128,7 +128,7 @@ namespace PlcLibrary.OpcUa
             if (points.Length == 0) return [];
 
             var results = new DriverResult[points.Length];
-            var validIndices = new Dictionary<int, int>();
+            Dictionary<int, int> validIndices = [];
             var collection = new ReadValueIdCollection();
 
             for (var i = 0; i < points.Length; i++)
@@ -180,7 +180,7 @@ namespace PlcLibrary.OpcUa
 
             var entryList = values.ToList();
             var results = new DriverResult[entryList.Count];
-            var validIndices = new Dictionary<int, int>();
+            Dictionary<int, int> validIndices = [];
             var collection = new WriteValueCollection();
 
             for (var i = 0; i < entryList.Count; i++)
@@ -244,51 +244,83 @@ namespace PlcLibrary.OpcUa
                 PublishingEnabled = true
             };
 
-            var validAddresses = new List<string>();
-
-            foreach (var point in points)
+            var validPoints = new (int OriginalIndex, string Address, NodeId NodeId)[points.Length];
+            var vpCount = 0;
+            for (var i = 0; i < points.Length; i++)
             {
-                if (TryParseNodeId(point.Address, out _))
-                    validAddresses.Add(point.Address);
+                if (TryParseNodeId(points[i].Address, out var nodeId))
+                    validPoints[vpCount++] = (i, points[i].Address, nodeId);
                 else
-                    OpcUaLog.LogInvalidAddress(_logger, point.Address);
+                    OpcUaLog.LogInvalidAddress(_logger, points[i].Address);
             }
 
-            sub.FastDataChangeCallback = (_, notification, __) =>
-            {
-                foreach (var item in notification.MonitoredItems)
-                {
-                    var address = validAddresses[(int)item.ClientHandle];
-                    var result = item.Value.Value is not null
-                        ? DriverResult.Good(address, item.Value.Value)
-                        : DriverResult.Bad(address, QualityCode.BadCommFailure, "Null value");
-                    onData(result, ct).AsTask();
-                }
-            };
+            var addresses = new string[vpCount];
+            for (var i = 0; i < vpCount; i++)
+                addresses[i] = validPoints[i].Address;
 
             session.AddSubscription(sub);
-            await sub.CreateAsync(ct).ConfigureAwait(false);
-
-            for (var i = 0; i < validAddresses.Count; i++)
+            try
             {
-                if (!TryParseNodeId(points[i].Address, out var nodeId)) continue;
+                await sub.CreateAsync(ct).ConfigureAwait(false);
 
-                var item = new MonitoredItem(null!, false, false)
+                for (var i = 0; i < vpCount; i++)
                 {
-                    DisplayName = points[i].TagId,
-                    StartNodeId = nodeId,
-                    AttributeId = Attributes.Value,
-                    SamplingInterval = points[i].SamplingInterval > 0 ? points[i].SamplingInterval : _config.PublishingInterval,
-                    QueueSize = (uint)Math.Max(1, points[i].QueueSize),
-                    DiscardOldest = true
+                    var (origIdx, _, nodeId) = validPoints[i];
+                    var item = new MonitoredItem(null!, false, false)
+                    {
+                        DisplayName = points[origIdx].TagId,
+                        StartNodeId = nodeId,
+                        AttributeId = Attributes.Value,
+                        SamplingInterval = points[origIdx].SamplingInterval > 0
+                            ? points[origIdx].SamplingInterval : _config.PublishingInterval,
+                        QueueSize = (uint)Math.Max(1, points[origIdx].QueueSize),
+                        DiscardOldest = true
+                    };
+                    sub.AddItem(item);
+                }
+
+                await sub.ApplyChangesAsync(ct).ConfigureAwait(false);
+
+                var handleToIndex = new Dictionary<uint, int>();
+                var monitoredItems = sub.MonitoredItems.ToArray();
+                for (var i = 0; i < vpCount; i++)
+                    handleToIndex[monitoredItems[i].ClientHandle] = i;
+
+                sub.FastDataChangeCallback = (_, notification, __) =>
+                {
+                    foreach (var item in notification.MonitoredItems)
+                    {
+                        if (!handleToIndex.TryGetValue(item.ClientHandle, out var idx)) continue;
+
+                        try
+                        {
+                            var result = item.Value.Value is not null
+                                ? DriverResult.Good(addresses[idx], item.Value.Value)
+                                : DriverResult.Bad(addresses[idx], QualityCode.BadCommFailure, "Null value");
+                            onData(result, ct).AsTask();
+                        }
+                        catch (Exception ex)
+                        {
+                            OpcUaLog.LogReadPointFailed(_logger, ex, addresses[idx]);
+                        }
+                    }
                 };
-                sub.AddItem(item);
+            }
+            catch
+            {
+                try
+                {
+#pragma warning disable CS0618
+                    session.RemoveSubscription(sub);
+#pragma warning restore CS0618
+                }
+                catch { }
+                sub.Dispose();
+                throw;
             }
 
-            await sub.ApplyChangesAsync(ct).ConfigureAwait(false);
-
             lock (_stateLock) { _subscriptions = new[] { sub }; }
-            OpcUaLog.LogSubscriptionStarted(_logger, validAddresses.Count, _config.PublishingInterval);
+            OpcUaLog.LogSubscriptionStarted(_logger, vpCount, _config.PublishingInterval);
 
             try { await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { }
@@ -317,8 +349,7 @@ namespace PlcLibrary.OpcUa
 
         public async ValueTask DisposeAsync()
         {
-            if (_disposed) return;
-            _disposed = true;
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             await StopPushingAsync(default).ConfigureAwait(false);
             await DisconnectAsync().ConfigureAwait(false);
             OpcUaLog.LogDisposed(_logger);

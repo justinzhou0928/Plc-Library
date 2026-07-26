@@ -13,6 +13,11 @@ namespace PlcLibrary.Controller.Engine
 
         public DeviceConfiguration Device => device;
 
+        public bool IsRunning
+        {
+            get { lock (_gate) { return _loopTask is { IsCompleted: false }; } }
+        }
+
         public Task StartAsync()
         {
             CancellationTokenSource? oldCts;

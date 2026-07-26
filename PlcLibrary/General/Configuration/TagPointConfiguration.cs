@@ -6,13 +6,13 @@ namespace PlcLibrary.General.Configuration
     {
         [Required]
         [MinLength(1)]
-        public string TagId { get; init; } = string.Empty;
+        public required string TagId { get; init; }
 
         public string Name { get; init; } = string.Empty;
 
         [Required]
         [MinLength(1)]
-        public string Address { get; init; } = string.Empty;
+        public required string Address { get; init; }
 
         public string DataType { get; init; } = string.Empty;
 

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using PlcLibrary.Controller.Collectors;
 using PlcLibrary.Controller.Interfaces;
+using PlcLibrary.Controller.Models;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.General;
 using PlcLibrary.General.Configuration;
@@ -44,7 +45,7 @@ namespace PlcLibrary.Controller.Engine
             await _applyLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                var desired = new Dictionary<string, DeviceConfiguration>();
+                Dictionary<string, DeviceConfiguration> desired = [];
                 foreach (var d in devices)
                 {
                     if (!d.Enabled) continue;
@@ -93,6 +94,20 @@ namespace PlcLibrary.Controller.Engine
                 tasks[i++] = a.StopAsync();
             await Task.WhenAll(tasks).ConfigureAwait(false);
             ControllerLog.LogSchedulerStopped(_logger);
+        }
+
+        public Task<IReadOnlyList<DeviceHealthInfo>> GetDeviceHealthAsync(CancellationToken ct = default)
+        {
+            var list = new List<DeviceHealthInfo>(_actuators.Count);
+            foreach (var (id, actuator) in _actuators)
+            {
+                var protocol = _activeConfigs.TryGetValue(id, out var cfg) ? cfg.Protocol : "unknown";
+                if (actuator.IsRunning)
+                    list.Add(DeviceHealthInfo.Healthy(id, protocol));
+                else
+                    list.Add(DeviceHealthInfo.Faulted(id, protocol, "Actuator stopped unexpectedly"));
+            }
+            return Task.FromResult<IReadOnlyList<DeviceHealthInfo>>(list);
         }
 
         internal void DisposeResources()

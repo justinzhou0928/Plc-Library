@@ -1,5 +1,17 @@
 <Project>
   <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
+    <Version>1.0.0</Version>
+    <Authors>JustiionZhou</Authors>
+    <Description>工业 PLC 数据采集基础库，支持 Modbus/S7/OPC UA 协议，含连接池、重试熔断、数据管道。</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\icon.png" Pack="true" PackagePath="\" />
+  </ItemGroup>
 </Project>

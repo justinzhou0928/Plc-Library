@@ -6,6 +6,7 @@ using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.General.Configuration;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -25,7 +26,6 @@ namespace PlcLibrary.Modbus
             _logger = logger;
             _slaveId = config.SlaveId;
             _masterFactory = masterFactory;
-            _master = masterFactory();
         }
 
         public DriverStatus DriverStatus
@@ -33,10 +33,9 @@ namespace PlcLibrary.Modbus
             get { lock (_stateLock) return _status; }
         }
 
-        public async Task ConnectAsync(CancellationToken ct = default)
+        public Task ConnectAsync(CancellationToken ct = default)
         {
-            await DisconnectAsync(ct).ConfigureAwait(false);
-
+            Disconnect(ct);
             lock (_stateLock) _status = DriverStatus.Connecting;
 
             var newMaster = _masterFactory();
@@ -50,9 +49,16 @@ namespace PlcLibrary.Modbus
             }
 
             try { oldMaster?.Dispose(); } catch { }
+            return Task.CompletedTask;
         }
 
         public Task DisconnectAsync(CancellationToken ct = default)
+        {
+            Disconnect(ct);
+            return Task.CompletedTask;
+        }
+
+        private void Disconnect(CancellationToken ct)
         {
             IModbusMaster? oldMaster;
             lock (_stateLock)
@@ -62,7 +68,6 @@ namespace PlcLibrary.Modbus
                 _status = DriverStatus.Disconnected;
             }
             try { oldMaster?.Dispose(); } catch { }
-            return Task.CompletedTask;
         }
 
         public async Task<bool> TryReconnectAsync(CancellationToken ct = default)
@@ -83,21 +88,25 @@ namespace PlcLibrary.Modbus
         public async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            if (points.Length == 0) return [];
             var master = GetMasterOrThrow();
             var results = new DriverResult[points.Length];
 
-            for (var i = 0; i < points.Length; i++)
+            var groups = BuildBatchGroups(points, results);
+
+            foreach (var group in groups)
             {
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    results[i] = await ReadSingleAsync(master, points[i], ct).ConfigureAwait(false);
+                    await ReadBatchAsync(master, group, results, ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
-                    ModbusLog.LogReadFailed(_logger, ex, points[i].Address);
-                    results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadCommFailure, ex.Message);
+                    ModbusLog.LogReadFailed(_logger, ex, group.Start.ToString());
+                    foreach (var idx in group.Indices)
+                        results[idx] = DriverResult.Bad(points[idx].Address, QualityCode.BadCommFailure, ex.Message);
                 }
             }
 
@@ -108,25 +117,27 @@ namespace PlcLibrary.Modbus
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            if (values.Count == 0) return [];
             var master = GetMasterOrThrow();
-            var results = new DriverResult[values.Count];
-            var i = 0;
+            var entryList = values.ToList();
+            var results = new DriverResult[entryList.Count];
 
-            foreach (var kvp in values)
+            var groups = BuildWriteGroups(entryList, results);
+
+            foreach (var group in groups)
             {
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    await WriteSingleAsync(master, kvp.Key, kvp.Value, ct).ConfigureAwait(false);
-                    results[i] = DriverResult.Good(kvp.Key.Address, null);
+                    await WriteBatchAsync(master, group, entryList, results, ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
-                    ModbusLog.LogWriteFailed(_logger, ex, kvp.Key.Address);
-                    results[i] = DriverResult.Bad(kvp.Key.Address, QualityCode.BadCommFailure, ex.Message);
+                    ModbusLog.LogWriteFailed(_logger, ex, group.Start.ToString());
+                    foreach (var idx in group.Indices)
+                        results[idx] = DriverResult.Bad(entryList[idx].Key.Address, QualityCode.BadCommFailure, ex.Message);
                 }
-                i++;
             }
 
             return results;
@@ -138,6 +149,179 @@ namespace PlcLibrary.Modbus
             ModbusLog.LogDriverDisposed(_logger);
         }
 
+        // ─── batch infrastructure ───
+
+        private readonly record struct PointInfo(int Index, ushort Offset);
+
+        private sealed class BatchGroup
+        {
+            public ModbusType Type;
+            public ushort Start;
+            public ushort Count;
+            public List<int> Indices = [];
+        }
+
+        private List<BatchGroup> BuildBatchGroups(TagPointConfiguration[] points, DriverResult[] results)
+        {
+            var byType = new Dictionary<ModbusType, List<PointInfo>>();
+
+            for (var i = 0; i < points.Length; i++)
+            {
+                if (!TryParseAddress(points[i].Address, out var type, out var offset))
+                {
+                    results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadConfigError, $"Invalid Modbus address: {points[i].Address}");
+                    continue;
+                }
+
+                if (!byType.TryGetValue(type, out var list))
+                    byType[type] = list = [];
+
+                list.Add(new PointInfo(i, offset));
+            }
+
+            var groups = new List<BatchGroup>();
+            foreach (var kv in byType)
+            {
+                kv.Value.Sort((a, b) => a.Offset.CompareTo(b.Offset));
+                BatchGroup? current = null;
+
+                foreach (var pi in kv.Value)
+                {
+                    if (current is null || pi.Offset != current.Start + current.Count)
+                    {
+                        current = new BatchGroup
+                        {
+                            Type = kv.Key,
+                            Start = pi.Offset,
+                            Count = 1,
+                            Indices = [pi.Index]
+                        };
+                        groups.Add(current);
+                    }
+                    else
+                    {
+                        current.Count++;
+                        current.Indices.Add(pi.Index);
+                    }
+                }
+            }
+
+            return groups;
+        }
+
+        private async Task ReadBatchAsync(IModbusMaster master, BatchGroup group, DriverResult[] results, CancellationToken ct)
+        {
+            switch (group.Type)
+            {
+                case ModbusType.Coil:
+                    var coils = await master.ReadCoilsAsync(_slaveId, group.Start, group.Count).ConfigureAwait(false);
+                    for (var i = 0; i < group.Indices.Count; i++)
+                        results[group.Indices[i]] = DriverResult.Good(results[group.Indices[i]].Address, coils[i]);
+                    break;
+
+                case ModbusType.DiscreteInput:
+                    var inputs = await master.ReadInputsAsync(_slaveId, group.Start, group.Count).ConfigureAwait(false);
+                    for (var i = 0; i < group.Indices.Count; i++)
+                        results[group.Indices[i]] = DriverResult.Good(results[group.Indices[i]].Address, inputs[i]);
+                    break;
+
+                case ModbusType.InputRegister:
+                    var iRegs = await master.ReadInputRegistersAsync(_slaveId, group.Start, group.Count).ConfigureAwait(false);
+                    for (var i = 0; i < group.Indices.Count; i++)
+                        results[group.Indices[i]] = DriverResult.Good(results[group.Indices[i]].Address, iRegs[i]);
+                    break;
+
+                case ModbusType.HoldingRegister:
+                    var hRegs = await master.ReadHoldingRegistersAsync(_slaveId, group.Start, group.Count).ConfigureAwait(false);
+                    for (var i = 0; i < group.Indices.Count; i++)
+                        results[group.Indices[i]] = DriverResult.Good(results[group.Indices[i]].Address, hRegs[i]);
+                    break;
+            }
+        }
+
+        private List<BatchGroup> BuildWriteGroups(
+            List<KeyValuePair<TagPointConfiguration, object>> entryList, DriverResult[] results)
+        {
+            var byType = new Dictionary<ModbusType, List<PointInfo>>();
+
+            for (var i = 0; i < entryList.Count; i++)
+            {
+                if (!TryParseAddress(entryList[i].Key.Address, out var type, out var offset))
+                {
+                    results[i] = DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadConfigError,
+                        $"Invalid Modbus address: {entryList[i].Key.Address}");
+                    continue;
+                }
+
+                if (type is not ModbusType.Coil and not ModbusType.HoldingRegister)
+                {
+                    results[i] = DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadConfigError,
+                        $"Write not supported for {type}");
+                    continue;
+                }
+
+                if (!byType.TryGetValue(type, out var list))
+                    byType[type] = list = [];
+
+                list.Add(new PointInfo(i, offset));
+            }
+
+            var groups = new List<BatchGroup>();
+            foreach (var kv in byType)
+            {
+                kv.Value.Sort((a, b) => a.Offset.CompareTo(b.Offset));
+                BatchGroup? current = null;
+
+                foreach (var pi in kv.Value)
+                {
+                    if (current is null || pi.Offset != current.Start + current.Count)
+                    {
+                        current = new BatchGroup
+                        {
+                            Type = kv.Key,
+                            Start = pi.Offset,
+                            Count = 1,
+                            Indices = [pi.Index]
+                        };
+                        groups.Add(current);
+                    }
+                    else
+                    {
+                        current.Count++;
+                        current.Indices.Add(pi.Index);
+                    }
+                }
+            }
+
+            return groups;
+        }
+
+        private async Task WriteBatchAsync(IModbusMaster master, BatchGroup group,
+            List<KeyValuePair<TagPointConfiguration, object>> entryList, DriverResult[] results, CancellationToken ct)
+        {
+            if (group.Type == ModbusType.Coil)
+            {
+                var values = new bool[group.Count];
+                for (var i = 0; i < group.Indices.Count; i++)
+                    values[i] = Convert.ToBoolean(entryList[group.Indices[i]].Value);
+
+                await master.WriteMultipleCoilsAsync(_slaveId, group.Start, values).ConfigureAwait(false);
+            }
+            else
+            {
+                var values = new ushort[group.Count];
+                for (var i = 0; i < group.Indices.Count; i++)
+                    values[i] = Convert.ToUInt16(entryList[group.Indices[i]].Value);
+
+                await master.WriteMultipleRegistersAsync(_slaveId, group.Start, values).ConfigureAwait(false);
+            }
+
+            foreach (var idx in group.Indices)
+                results[idx] = DriverResult.Good(entryList[idx].Key.Address, null);
+        }
+
+        // ─── helpers ───
+
         private IModbusMaster GetMasterOrThrow()
         {
             lock (_stateLock)
@@ -146,76 +330,6 @@ namespace PlcLibrary.Modbus
                     throw new InvalidOperationException("Modbus driver is not connected");
                 return _master;
             }
-        }
-
-        private async Task<DriverResult> ReadSingleAsync(IModbusMaster master, TagPointConfiguration point, CancellationToken ct)
-        {
-            if (!TryParseAddress(point.Address, out var type, out var offset))
-            {
-                ModbusLog.LogAddressParseFailed(_logger, point.Address);
-                return DriverResult.Bad(point.Address, QualityCode.BadConfigError, $"Invalid Modbus address: {point.Address}");
-            }
-
-            var result = type switch
-            {
-                ModbusType.Coil => await ReadCoilAsync(master, offset, ct).ConfigureAwait(false),
-                ModbusType.DiscreteInput => await ReadDiscreteInputAsync(master, offset, ct).ConfigureAwait(false),
-                ModbusType.InputRegister => await ReadInputRegisterAsync(master, offset, ct).ConfigureAwait(false),
-                ModbusType.HoldingRegister => await ReadHoldingRegisterAsync(master, offset, ct).ConfigureAwait(false),
-                _ => DriverResult.Bad(point.Address, QualityCode.BadConfigError, $"Unknown type for: {point.Address}"),
-            };
-
-            return result with { Address = point.Address };
-        }
-
-        private async Task WriteSingleAsync(IModbusMaster master, TagPointConfiguration point, object value, CancellationToken ct)
-        {
-            if (!TryParseAddress(point.Address, out var type, out var offset))
-                throw new InvalidOperationException($"Invalid Modbus address: {point.Address}");
-
-            switch (type)
-            {
-                case ModbusType.Coil:
-                    await master.WriteSingleCoilAsync(_slaveId, offset, Convert.ToBoolean(value)).ConfigureAwait(false);
-                    break;
-                case ModbusType.HoldingRegister:
-                    await master.WriteSingleRegisterAsync(_slaveId, offset, Convert.ToUInt16(value)).ConfigureAwait(false);
-                    break;
-                default:
-                    throw new InvalidOperationException($"Write not supported for {type} at {point.Address}");
-            }
-        }
-
-        private async Task<DriverResult> ReadCoilAsync(IModbusMaster master, ushort offset, CancellationToken ct)
-        {
-            var values = await master.ReadCoilsAsync(_slaveId, offset, 1).ConfigureAwait(false);
-            return values.Length > 0
-                ? DriverResult.Good(offset.ToString(), values[0])
-                : DriverResult.Bad(offset.ToString(), QualityCode.BadCommFailure, "Empty response");
-        }
-
-        private async Task<DriverResult> ReadDiscreteInputAsync(IModbusMaster master, ushort offset, CancellationToken ct)
-        {
-            var values = await master.ReadInputsAsync(_slaveId, offset, 1).ConfigureAwait(false);
-            return values.Length > 0
-                ? DriverResult.Good(offset.ToString(), values[0])
-                : DriverResult.Bad(offset.ToString(), QualityCode.BadCommFailure, "Empty response");
-        }
-
-        private async Task<DriverResult> ReadInputRegisterAsync(IModbusMaster master, ushort offset, CancellationToken ct)
-        {
-            var values = await master.ReadInputRegistersAsync(_slaveId, offset, 1).ConfigureAwait(false);
-            return values.Length > 0
-                ? DriverResult.Good(offset.ToString(), values[0])
-                : DriverResult.Bad(offset.ToString(), QualityCode.BadCommFailure, "Empty response");
-        }
-
-        private async Task<DriverResult> ReadHoldingRegisterAsync(IModbusMaster master, ushort offset, CancellationToken ct)
-        {
-            var values = await master.ReadHoldingRegistersAsync(_slaveId, offset, 1).ConfigureAwait(false);
-            return values.Length > 0
-                ? DriverResult.Good(offset.ToString(), values[0])
-                : DriverResult.Bad(offset.ToString(), QualityCode.BadCommFailure, "Empty response");
         }
 
         internal static bool TryParseAddress(string address, out ModbusType type, out ushort offset)

@@ -10,17 +10,17 @@ namespace PlcLibrary.General.Configuration
 
         [Required]
         [MinLength(1)]
-        public string Id { get; init; } = string.Empty;
+        public required string Id { get; init; }
 
         public string Name { get; init; } = string.Empty;
 
         [Required]
         [MinLength(1)]
-        public string Protocol { get; init; } = string.Empty;
+        public required string Protocol { get; init; }
 
         [Required]
         [MinLength(1)]
-        public string ConnectionString { get; init; } = string.Empty;
+        public required string ConnectionString { get; init; }
 
         public TimeSpan ConnectionTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
@@ -32,12 +32,12 @@ namespace PlcLibrary.General.Configuration
 
         public bool Validate(out IReadOnlyList<ValidationResult> errors)
         {
-            var list = new List<ValidationResult>();
+            List<ValidationResult> list = [];
             Validator.TryValidateObject(this, new ValidationContext(this), list, true);
 
             foreach (var tag in TagPoints)
             {
-                var tagResults = new List<ValidationResult>();
+                List<ValidationResult> tagResults = [];
                 if (!Validator.TryValidateObject(tag, new ValidationContext(tag), tagResults, true))
                     list.AddRange(tagResults);
             }

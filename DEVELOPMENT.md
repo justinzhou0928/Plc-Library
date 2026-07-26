@@ -71,7 +71,7 @@ internal sealed class TaskScheduler : IDeviceScheduler
     public async Task ApplyDevicesAsync(...) { /* 差量 reconcile */ }
     internal async Task StopSchedulerAsync() { /* 停止所有 TaskActuator */ }
     internal void DisposeResources() { /* 释放 SemaphoreSlim */ }
-    internal SchedulerHealthStatus GetHealthStatus() { /* 健康状态 */ }
+    public Task<IReadOnlyList<DeviceHealthInfo>> GetDeviceHealthAsync(CancellationToken ct) { /* 健康状态 */ }
 }
 
 internal sealed class TaskSchedulerHost(TaskScheduler scheduler) : BackgroundService

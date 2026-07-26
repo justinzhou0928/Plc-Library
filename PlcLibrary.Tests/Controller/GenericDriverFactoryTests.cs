@@ -24,7 +24,7 @@ public class GenericDriverFactoryTests
         var driver = Mock.Of<IProtocolDriver>();
         var factory = new GenericDriverFactory("S7", _ => driver, false);
 
-        var result = await factory.CreateAsync(new DeviceConfiguration { Id = "d1" });
+        var result = await factory.CreateAsync(new DeviceConfiguration { Id = "d1", Protocol = "S7", ConnectionString = "host:127.0.0.1" });
 
         Assert.Same(driver, result);
     }

@@ -15,7 +15,12 @@ namespace PlcLibrary.Modbus
         private static IModbusMaster CreateMaster(string connectionString)
         {
             var config = ModbusDriverConfig.Parse(connectionString);
-            return new ModbusFactory().CreateMaster(new TcpClient(config.Host, config.Port));
+            var tcpClient = new TcpClient(config.Host, config.Port)
+            {
+                SendTimeout = config.Timeout,
+                ReceiveTimeout = config.Timeout
+            };
+            return new ModbusFactory().CreateMaster(tcpClient);
         }
     }
 }

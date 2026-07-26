@@ -1,3 +1,4 @@
+using PlcLibrary.Controller.Models;
 using PlcLibrary.General.Configuration;
 using System.Collections.Generic;
 using System.Threading;
@@ -8,5 +9,7 @@ namespace PlcLibrary.Controller.Interfaces
     public interface IDeviceScheduler
     {
         Task ApplyDevicesAsync(IReadOnlyList<DeviceConfiguration> devices, CancellationToken ct = default);
+
+        Task<IReadOnlyList<DeviceHealthInfo>> GetDeviceHealthAsync(CancellationToken ct = default);
     }
 }

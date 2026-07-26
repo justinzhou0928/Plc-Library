@@ -1,16 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>
-
-  <ItemGroup>
-    <None Include="..\README.md" Pack="true" PackagePath="\" />
-    <None Include="..\icon.png" Pack="true" PackagePath="\" />
-  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua.Client" Version="1.5.378.156" />
