@@ -373,7 +373,7 @@ foreach (var d in health)
 | [OPCFoundation.NetStandard.Opc.Ua.Client](https://www.nuget.org/packages/OPCFoundation.NetStandard.Opc.Ua.Client) | OPC UA 客户端 | [github.com/OPCFoundation/UA-.NETStandard](https://github.com/OPCFoundation/UA-.NETStandard) |
 | [Snet.Mitsubishi](https://www.nuget.org/packages/Snet.Mitsubishi) | 三菱 MC/A1E/FX 协议 | [github.com/shunnet](https://github.com/shunnet) |
 | [NewLife.Omron](https://www.nuget.org/packages/NewLife.Omron) | 欧姆龙 FINS/HostLink 协议 | [github.com/NewLifeX/NewLife.Omron](https://github.com/NewLifeX/NewLife.Omron) |
-| [EthernetIPSharp](https://www.nuget.org/packages/EthernetIPSharp) | Allen-Bradley EtherNet/IP | [github.com/martin-kw/EthernetIPSharp](https://github.com/martin-kw/EthernetIPSharp) |
+| [EthernetIPSharp](https://www.nuget.org/packages/EthernetIPSharp) | Allen-Bradley EtherNet/IP | [github.com/CristianMori/EthernetIpSharp](https://github.com/CristianMori/EthernetIpSharp) |
 | [BACnet](https://www.nuget.org/packages/BACnet) | BACnet 协议栈 | [github.com/ela-compil/BACnet](https://github.com/ela-compil/BACnet) |
 
 ## 许可证
