@@ -194,7 +194,7 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 | timeout | 5000 | 超时 (ms) |
 | publishinginterval | 1000 | 订阅发布间隔 (ms) |
 | sessiontimeout | 60000 | 会话超时 (ms) |
-| autoacceptcertificate | true | 自动接受证书 |
+| autoacceptcertificate | false | 自动接受证书（生产环境应设为 false） |
 
 示例：`endpoint:opc.tcp://10.0.0.1:4840;security:None;timeout:10000`
 
@@ -280,7 +280,42 @@ ControlLogix 示例：`host:192.168.1.96;path:1,0`
 
 示例：`host:192.168.1.50;port:47808;deviceinstance:12345`
 
-## 配置
+## 点位数据类型 (DataType)
+
+部分驱动需要 `TagPointConfiguration.DataType` 指定点位的数据类型，以正确解析 PLC 返回值：
+
+| 驱动 | DataType 是否必需 | 未指定时的默认值 | 说明 |
+|------|:--:|------|------|
+| S7 | 否 | 地址推断 | 地址格式已含类型（`DBX`=bool, `DBW`=word） |
+| Modbus | 否 | 地址前缀推断 | `0xxxx`=bool, `4xxxx`=ushort |
+| OPC UA | 否 | 服务端返回 | 服务端告知类型，值透传 |
+| BACnet | 否 | 服务端返回 | `PROP_PRESENT_VALUE` 返回原始值 |
+| AllenBradley | **推荐** | `int` | 用于确定 `ReadAsync<T>` 的泛型类型 |
+| Mitsubishi | **推荐** | `Int16` | 映射为 Snet `DataType` 枚举 |
+| Omron | **推荐** | `int` | 分发到 `ReadInt16Async`/`ReadFloatAsync` 等方法 |
+
+支持的 DataType 值（大小写不敏感）：
+
+| 简写 | 完整名称 | C# 类型 |
+|------|----------|--------|
+| `bool` | `System.Boolean` | `bool` |
+| `short` | `System.Int16` | `short` |
+| `ushort` | `System.UInt16` | `ushort` |
+| `int` | `System.Int32` | `int` |
+| `uint` | `System.UInt32` | `uint` |
+| `long` | `System.Int64` | `long` |
+| `ulong` | `System.UInt64` | `ulong` |
+| `float` | `System.Single` | `float` |
+| `double` | `System.Double` | `double` |
+| `string` | `System.String` | `string` |
+
+```csharp
+// Omron D100 为 32 位浮点数
+new TagPointConfiguration { TagId = "temp", Address = "D100", DataType = "float" }
+
+// AllenBradley tag 为布尔量
+new TagPointConfiguration { TagId = "run", Address = "MotorRun", DataType = "bool" }
+```
 
 ### 驱动池
 
@@ -371,7 +406,7 @@ foreach (var d in health)
 | [S7netplus](https://www.nuget.org/packages/S7netplus) | Siemens S7 通信 | [github.com/S7NetPlus/s7netplus](https://github.com/S7NetPlus/s7netplus) |
 | [NModbus](https://www.nuget.org/packages/NModbus) | Modbus 协议 | [github.com/NModbus/NModbus](https://github.com/NModbus/NModbus) |
 | [OPCFoundation.NetStandard.Opc.Ua.Client](https://www.nuget.org/packages/OPCFoundation.NetStandard.Opc.Ua.Client) | OPC UA 客户端 | [github.com/OPCFoundation/UA-.NETStandard](https://github.com/OPCFoundation/UA-.NETStandard) |
-| [Snet.Mitsubishi](https://www.nuget.org/packages/Snet.Mitsubishi) | 三菱 MC/A1E/FX 协议 | [github.com/shunnet](https://github.com/shunnet) |
+| [Snet.Mitsubishi](https://www.nuget.org/packages/Snet.Mitsubishi) | 三菱 MC/A1E/FX 协议 | [github.com/shunnet](https://github.com/shunnet)（组织） |
 | [NewLife.Omron](https://www.nuget.org/packages/NewLife.Omron) | 欧姆龙 FINS/HostLink 协议 | [github.com/NewLifeX/NewLife.Omron](https://github.com/NewLifeX/NewLife.Omron) |
 | [EthernetIPSharp](https://www.nuget.org/packages/EthernetIPSharp) | Allen-Bradley EtherNet/IP | [github.com/CristianMori/EthernetIpSharp](https://github.com/CristianMori/EthernetIpSharp) |
 | [BACnet](https://www.nuget.org/packages/BACnet) | BACnet 协议栈 | [github.com/ela-compil/BACnet](https://github.com/ela-compil/BACnet) |

@@ -4,10 +4,12 @@ using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
+using PlcLibrary.DriverDomain.Parser;
 using PlcLibrary.General.Configuration;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -21,6 +23,38 @@ namespace PlcLibrary.Omron
         private readonly object _stateLock = new();
         private FinsClient? _finsClient;
         private DriverStatus _status = DriverStatus.Disconnected;
+
+        private static readonly Dictionary<Type, MethodInfo> ReadMethods;
+        private static readonly Dictionary<Type, MethodInfo> WriteMethods;
+
+        static OmronDriver()
+        {
+            var methods = typeof(FinsClient).GetMethods(BindingFlags.Public | BindingFlags.Instance);
+            ReadMethods = new()
+            {
+                [typeof(bool)]   = methods.First(m => m.Name == "ReadBoolAsync"),
+                [typeof(short)]  = methods.First(m => m.Name == "ReadInt16Async"),
+                [typeof(int)]    = methods.First(m => m.Name == "ReadInt32Async"),
+                [typeof(long)]   = methods.First(m => m.Name == "ReadInt64Async"),
+                [typeof(ushort)] = methods.First(m => m.Name == "ReadUInt16Async"),
+                [typeof(uint)]   = methods.First(m => m.Name == "ReadUInt32Async"),
+                [typeof(ulong)]  = methods.First(m => m.Name == "ReadUInt64Async"),
+                [typeof(float)]  = methods.First(m => m.Name == "ReadFloatAsync"),
+                [typeof(double)] = methods.First(m => m.Name == "ReadDoubleAsync"),
+            };
+            WriteMethods = new()
+            {
+                [typeof(bool)]   = methods.First(m => m.Name == "WriteBoolAsync"),
+                [typeof(short)]  = methods.First(m => m.Name == "WriteInt16Async"),
+                [typeof(int)]    = methods.First(m => m.Name == "WriteInt32Async"),
+                [typeof(long)]   = methods.First(m => m.Name == "WriteInt64Async"),
+                [typeof(ushort)] = methods.First(m => m.Name == "WriteUInt16Async"),
+                [typeof(uint)]   = methods.First(m => m.Name == "WriteUInt32Async"),
+                [typeof(ulong)]  = methods.First(m => m.Name == "WriteUInt64Async"),
+                [typeof(float)]  = methods.First(m => m.Name == "WriteFloatAsync"),
+                [typeof(double)] = methods.First(m => m.Name == "WriteDoubleAsync"),
+            };
+        }
 
         public OmronDriver(ILogger<OmronDriver> logger, DeviceConfiguration device)
         {
@@ -110,7 +144,8 @@ namespace PlcLibrary.Omron
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    var value = await finsClient.ReadInt16Async(points[i].Address).ConfigureAwait(false);
+                    var type = DataTypeMapper.Resolve(points[i].DataType);
+                    var value = await ReadTypedAsync(finsClient, points[i].Address, type).ConfigureAwait(false);
                     results[i] = DriverResult.Good(points[i].Address, value);
                 }
                 catch (OperationCanceledException) { throw; }
@@ -138,8 +173,8 @@ namespace PlcLibrary.Omron
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    var bytes = BitConverter.GetBytes(Convert.ToInt16(entryList[i].Value));
-                    await finsClient.WriteAsync(entryList[i].Key.Address, bytes).ConfigureAwait(false);
+                    var type = DataTypeMapper.Resolve(entryList[i].Key.DataType);
+                    await WriteTypedAsync(finsClient, entryList[i].Key.Address, entryList[i].Value, type).ConfigureAwait(false);
                     results[i] = DriverResult.Good(entryList[i].Key.Address, null);
                 }
                 catch (OperationCanceledException) { throw; }
@@ -157,6 +192,26 @@ namespace PlcLibrary.Omron
         {
             await DisconnectAsync().ConfigureAwait(false);
             OmronLog.LogDisposed(_logger);
+        }
+
+        private static async Task<object?> ReadTypedAsync(FinsClient client, string address, Type type)
+        {
+            if (!ReadMethods.TryGetValue(type, out var method))
+                throw new NotSupportedException($"Omron: unsupported read type '{type.Name}'. Use int, float, bool, etc.");
+
+            var task = (Task)method.Invoke(client, [address])!;
+            await task.ConfigureAwait(false);
+            return task.GetType().GetProperty("Result")!.GetValue(task);
+        }
+
+        private static async Task WriteTypedAsync(FinsClient client, string address, object value, Type type)
+        {
+            if (!WriteMethods.TryGetValue(type, out var method))
+                throw new NotSupportedException($"Omron: unsupported write type '{type.Name}'. Use int, float, bool, etc.");
+
+            var converted = Convert.ChangeType(value, type);
+            var task = (Task)method.Invoke(client, [address, converted])!;
+            await task.ConfigureAwait(false);
         }
 
         private void SetState(FinsClient? client, DriverStatus status)

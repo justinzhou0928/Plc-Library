@@ -11,7 +11,7 @@ namespace PlcLibrary.OpcUa
         public int Timeout { get; init; } = 5000;
         public int PublishingInterval { get; init; } = 1000;
         public int SessionTimeout { get; init; } = 60000;
-        public bool AutoAcceptCertificate { get; init; } = true;
+        public bool AutoAcceptCertificate { get; init; } = false;
         public string PkiOwnPath { get; init; } = "PlcLibrary.OpcUa/pki/own";
         public string PkiTrustedPath { get; init; } = "PlcLibrary.OpcUa/pki/trusted";
         public string PkiRejectedPath { get; init; } = "PlcLibrary.OpcUa/pki/rejected";

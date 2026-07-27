@@ -14,7 +14,7 @@ public class OpcUaDriverConfigTests
         Assert.Equal(5000, config.Timeout);
         Assert.Equal(1000, config.PublishingInterval);
         Assert.Equal(60000, config.SessionTimeout);
-        Assert.True(config.AutoAcceptCertificate);
+        Assert.False(config.AutoAcceptCertificate);
     }
 
     [Fact]

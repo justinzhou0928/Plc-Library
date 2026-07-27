@@ -3,6 +3,7 @@ using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
+using PlcLibrary.DriverDomain.Parser;
 using PlcLibrary.General.Configuration;
 using System;
 using System.Collections.Concurrent;
@@ -25,6 +26,21 @@ namespace PlcLibrary.Mitsubishi
         private readonly object _stateLock = new();
         private MitsubishiOperate? _operate;
         private DriverStatus _status = DriverStatus.Disconnected;
+
+        private static readonly Dictionary<Type, DataType> DataTypeMapping = new()
+        {
+            [typeof(bool)]   = DataType.Bool,
+            [typeof(byte)]   = DataType.Byte,
+            [typeof(short)]  = DataType.Int16,
+            [typeof(ushort)] = DataType.UInt16,
+            [typeof(int)]    = DataType.Int32,
+            [typeof(uint)]   = DataType.UInt32,
+            [typeof(long)]   = DataType.Int64,
+            [typeof(ulong)]  = DataType.UInt64,
+            [typeof(float)]  = DataType.Float,
+            [typeof(double)] = DataType.Double,
+            [typeof(string)] = DataType.String,
+        };
 
         public MitsubishiDriver(ILogger<MitsubishiDriver> logger, DeviceConfiguration device)
         {
@@ -212,11 +228,17 @@ namespace PlcLibrary.Mitsubishi
                 {
                     SN = p.TagId,
                     AddressName = p.Address,
-                    AddressDataType = Snet.Model.@enum.DataType.Int16,
+                    AddressDataType = ResolveDataType(p.DataType),
                     IsEnable = true,
                     AddressType = AddressType.Reality
                 }).ToList()
             };
+        }
+
+        private static DataType ResolveDataType(string? dataType)
+        {
+            var type = DataTypeMapper.Resolve(dataType);
+            return DataTypeMapping.TryGetValue(type, out var dt) ? dt : DataType.Int16;
         }
 
         private void SetState(MitsubishiOperate? operate, DriverStatus status)

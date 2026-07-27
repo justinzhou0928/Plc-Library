@@ -222,6 +222,20 @@ public static S7DriverConfig Parse(string cs)
 
 `Bind<T>()` 处理 int、string、short、bool 等内置类型；第三方 enum 可能绑定失败，通过 `with` 表达式仅覆盖该字段。
 
+### 1.1 数据类型映射
+
+当驱动需要根据 `TagPointConfiguration.DataType` 确定读写类型时，使用共享的 `DataTypeMapper`：
+
+```csharp
+using PlcLibrary.DriverDomain.Parser;
+
+var type = DataTypeMapper.Resolve(points[i].DataType);
+// type: typeof(int), typeof(float), typeof(bool), 等
+// 未指定 DataType 时默认返回 typeof(int)
+```
+
+支持的类型简写：`bool`/`short`/`ushort`/`int`/`uint`/`long`/`ulong`/`float`/`double`/`string` 以及对应的 `System.Xxx` 完整名称。
+
 ### 2. 实现 IProtocolDriver
 
 ```csharp

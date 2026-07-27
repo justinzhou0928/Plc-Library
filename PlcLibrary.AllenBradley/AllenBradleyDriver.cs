@@ -4,6 +4,7 @@ using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
+using PlcLibrary.DriverDomain.Parser;
 using PlcLibrary.General.Configuration;
 using System;
 using System.Collections.Generic;
@@ -26,6 +27,10 @@ namespace PlcLibrary.AllenBradley
         private static readonly MethodInfo ReadAsyncMethod = typeof(TagClient)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance)
             .First(m => m.Name == "ReadAsync" && m.IsGenericMethodDefinition);
+
+        private static readonly MethodInfo WriteAsyncMethod = typeof(TagClient)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .First(m => m.Name == "WriteAsync" && m.IsGenericMethodDefinition);
 
         public AllenBradleyDriver(ILogger<AllenBradleyDriver> logger, DeviceConfiguration device)
         {
@@ -109,7 +114,8 @@ namespace PlcLibrary.AllenBradley
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    var value = await ReadTagAsObjectAsync(tagClient, points[i].Address, ct).ConfigureAwait(false);
+                    var type = DataTypeMapper.Resolve(points[i].DataType);
+                    var value = await ReadTypedAsync(tagClient, points[i].Address, type, ct).ConfigureAwait(false);
                     results[i] = DriverResult.Good(points[i].Address, value);
                 }
                 catch (OperationCanceledException) { throw; }
@@ -137,8 +143,9 @@ namespace PlcLibrary.AllenBradley
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    await WriteTagAsObjectAsync(tagClient, entryList[i].Key.Address,
-                        entryList[i].Value, ct).ConfigureAwait(false);
+                    var type = DataTypeMapper.Resolve(entryList[i].Key.DataType);
+                    await WriteTypedAsync(tagClient, entryList[i].Key.Address,
+                        entryList[i].Value, type, ct).ConfigureAwait(false);
                     results[i] = DriverResult.Good(entryList[i].Key.Address, null);
                 }
                 catch (OperationCanceledException) { throw; }
@@ -158,30 +165,24 @@ namespace PlcLibrary.AllenBradley
             AllenBradleyLog.LogDisposed(_logger);
         }
 
-        private static async Task<object?> ReadTagAsObjectAsync(TagClient client, string tagName, CancellationToken ct)
+        private static async Task<object?> ReadTypedAsync(TagClient client, string tagName, Type type, CancellationToken ct)
         {
-            var types = new[] { typeof(int), typeof(float), typeof(bool), typeof(short), typeof(uint) };
-            foreach (var t in types)
-            {
-                try
-                {
-                    var method = ReadAsyncMethod.MakeGenericMethod(t);
-                    var task = (Task)method.Invoke(client, [tagName, ct])!;
-                    await task.ConfigureAwait(false);
-                    var resultProperty = task.GetType().GetProperty("Result")!;
-                    return resultProperty.GetValue(task);
-                }
-                catch (TargetInvocationException) { }
-                catch { }
-            }
+            if (type == typeof(string))
+                return await client.ReadStringAsync(tagName, ct).ConfigureAwait(false);
 
-            throw new InvalidOperationException($"Cannot read tag '{tagName}': type not supported");
+            var method = ReadAsyncMethod.MakeGenericMethod(type);
+            var task = (Task)method.Invoke(client, [tagName, ct])!;
+            await task.ConfigureAwait(false);
+            var resultProperty = task.GetType().GetProperty("Result")!;
+            return resultProperty.GetValue(task);
         }
 
-        private static async Task WriteTagAsObjectAsync(TagClient client, string tagName, object value,
-            CancellationToken ct)
+        private static async Task WriteTypedAsync(TagClient client, string tagName, object value, Type type, CancellationToken ct)
         {
-            await client.WriteAsync(tagName, Convert.ToInt32(value), ct).ConfigureAwait(false);
+            var converted = Convert.ChangeType(value, type);
+            var method = WriteAsyncMethod.MakeGenericMethod(type);
+            var task = (Task)method.Invoke(client, [tagName, converted, ct])!;
+            await task.ConfigureAwait(false);
         }
 
         private void SetState(TagClient? client, DriverStatus status)
