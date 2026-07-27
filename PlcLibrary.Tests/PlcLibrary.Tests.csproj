@@ -17,6 +17,10 @@
     <ProjectReference Include="..\PlcLibrary.OpcUa\PlcLibrary.OpcUa.csproj" />
     <ProjectReference Include="..\PlcLibrary.S7\PlcLibrary.S7.csproj" />
     <ProjectReference Include="..\PlcLibrary.Modbus\PlcLibrary.Modbus.csproj" />
+    <ProjectReference Include="..\PlcLibrary.Mitsubishi\PlcLibrary.Mitsubishi.csproj" />
+    <ProjectReference Include="..\PlcLibrary.Omron\PlcLibrary.Omron.csproj" />
+    <ProjectReference Include="..\PlcLibrary.AllenBradley\PlcLibrary.AllenBradley.csproj" />
+    <ProjectReference Include="..\PlcLibrary.Bacnet\PlcLibrary.Bacnet.csproj" />
   </ItemGroup>
 
 </Project>

@@ -16,6 +16,10 @@ PLC 数据采集库，提供连接池管理、定时采集调度、数据分发�
 | `ModbusTcpDriver` | Modbus TCP | 可用 |
 | `ModbusUdpDriver` | Modbus UDP | 可用 |
 | `OpcUaDriver` | OPC UA | 可用 |
+| `MitsubishiDriver` | Mitsubishi MC / A1E / FX | 可用 |
+| `OmronDriver` | Omron FINS TCP | 可用 |
+| `AllenBradleyDriver` | Allen-Bradley Logix Tag (CIP/EtherNet/IP) | 可用 |
+| `BacnetDriver` | BACnet/IP | 可用 |
 | `ModbusRtuDriver` | Modbus RTU | 待 NModbus 更新 |
 | `ModbusAsciiDriver` | Modbus ASCII | 待 NModbus 更新 |
 
@@ -31,6 +35,10 @@ dotnet add package PlcLibrary
 dotnet add package PlcLibrary.S7
 dotnet add package PlcLibrary.Modbus
 dotnet add package PlcLibrary.OpcUa
+dotnet add package PlcLibrary.Mitsubishi
+dotnet add package PlcLibrary.Omron
+dotnet add package PlcLibrary.AllenBradley
+dotnet add package PlcLibrary.Bacnet
 ```
 
 ## 快速开始
@@ -190,6 +198,88 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 
 示例：`endpoint:opc.tcp://10.0.0.1:4840;security:None;timeout:10000`
 
+**Mitsubishi**
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| host | 127.0.0.1 | PLC 地址 |
+| port | 6000 | 端口 |
+| timeout | 3000 | 超时 (ms) |
+| protocoltype | MC | MC / A1E / FX |
+
+示例：`host:192.168.1.1;port:6000;protocoltype:MC`
+
+地址格式：三菱标准地址字符串，取决于所选协议类型：
+
+| 协议类型 | 地址示例 | 说明 |
+|----------|----------|------|
+| `MC` | `D100`、`M100`、`X10`、`Y20`、`W0` | MELSEC MC 协议 |
+| `A1E` | `D100`、`M100`、`X0`、`Y0` | A-1E 协议 |
+| `FX` | `D100`、`M100`、`X0`、`Y0` | FX 编程口协议 |
+
+**Omron FINS**
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| host | 127.0.0.1 | PLC 地址 |
+| port | 9600 | 端口 |
+| timeout | 3000 | 超时 (ms) |
+| localnode | 1 | 本机 FINS 节点号 |
+| destinynode | 2 | 目标 FINS 节点号 |
+| isudp | false | 使用 UDP 传输 |
+
+地址格式：Omron 标准 FINS 地址字符串。
+
+| 区域 | 地址示例 | 说明 |
+|------|----------|------|
+| DM | `D100`、`D200` | 数据存储器 |
+| CIO | `CIO200`、`CIO200.5` | 通道 I/O（`.5` 表示位） |
+| WR | `W100` | 工作继电器 |
+| HR | `H0`、`H10` | 保持继电器 |
+| AR | `A0` | 辅助继电器 |
+
+示例：`host:192.168.1.1;port:9600;localnode:1;destinynode:2`
+
+**Allen-Bradley / Rockwell**
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| host | 127.0.0.1 | PLC / 网关模块地址 |
+| port | 44818 | EtherNet/IP 端口 |
+| timeout | 5000 | 超时 (ms) |
+| path | - | 路由路径（如 `1,0` 表示背板槽位 0） |
+| useconnected | false | Class 3 连接（高频轮询时推荐开启） |
+
+地址格式：Logix 标签名。
+
+| 地址示例 | 说明 |
+|----------|------|
+| `rate` | 基础标签（DINT/REAL/BOOL 等原子类型） |
+| `counts[3]` | 数组元素索引 |
+| `Temp[10].AnotherArray[4]` | 嵌套数组 |
+| `MyUdt.enable` | UDT 结构体成员 |
+| `matrix[1,2,3]` | 多维数组 |
+
+CompactLogix 示例：`host:192.168.1.96`
+
+ControlLogix 示例：`host:192.168.1.96;path:1,0`
+
+**BACnet**
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| host | 127.0.0.1 | 目标设备 IP |
+| port | 47808 | BACnet/IP 端口 (0xBAC0) |
+| timeout | 5000 | 超时 (ms) |
+| deviceinstance | 0 | 目标设备实例号（0 表示使用 IP 地址通信） |
+| localendpointip | - | 多网卡时指定绑定 IP |
+
+地址格式：`TYPE:INSTANCE`（如 `AV:1` = Analog Value 1、`BI:0` = Binary Input 0）。
+
+支持类型：`AI`/`AO`/`AV`/`BI`/`BO`/`BV`/`MI`/`MO`/`MV`。
+
+示例：`host:192.168.1.50;port:47808;deviceinstance:12345`
+
 ## 配置
 
 ### 驱动池
@@ -271,6 +361,20 @@ foreach (var d in health)
 ```
 
 返回 `IReadOnlyList<DeviceHealthInfo>`，每个设备包含 `DeviceId`、`Protocol`、`IsRunning`、`Error` 和 `UpdatedAt`。
+
+## 致谢
+
+本项目基于以下优秀的开源库构建：
+
+| 库 | 用途 | GitHub |
+|----|------|--------|
+| [S7netplus](https://www.nuget.org/packages/S7netplus) | Siemens S7 通信 | [github.com/S7NetPlus/s7netplus](https://github.com/S7NetPlus/s7netplus) |
+| [NModbus](https://www.nuget.org/packages/NModbus) | Modbus 协议 | [github.com/NModbus/NModbus](https://github.com/NModbus/NModbus) |
+| [OPCFoundation.NetStandard.Opc.Ua.Client](https://www.nuget.org/packages/OPCFoundation.NetStandard.Opc.Ua.Client) | OPC UA 客户端 | [github.com/OPCFoundation/UA-.NETStandard](https://github.com/OPCFoundation/UA-.NETStandard) |
+| [Snet.Mitsubishi](https://www.nuget.org/packages/Snet.Mitsubishi) | 三菱 MC/A1E/FX 协议 | [github.com/shunnet](https://github.com/shunnet) |
+| [NewLife.Omron](https://www.nuget.org/packages/NewLife.Omron) | 欧姆龙 FINS/HostLink 协议 | [github.com/NewLifeX/NewLife.Omron](https://github.com/NewLifeX/NewLife.Omron) |
+| [EthernetIPSharp](https://www.nuget.org/packages/EthernetIPSharp) | Allen-Bradley EtherNet/IP | [github.com/martin-kw/EthernetIPSharp](https://github.com/martin-kw/EthernetIPSharp) |
+| [BACnet](https://www.nuget.org/packages/BACnet) | BACnet 协议栈 | [github.com/ela-compil/BACnet](https://github.com/ela-compil/BACnet) |
 
 ## 许可证
 

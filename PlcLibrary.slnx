@@ -2,6 +2,10 @@
   <Project Path="PlcLibrary.Modbus/PlcLibrary.Modbus.csproj" Id="7daafcba-19ce-4fba-8721-8b2ac0923c94" />
   <Project Path="PlcLibrary.OpcUa/PlcLibrary.OpcUa.csproj" />
   <Project Path="PlcLibrary.S7/PlcLibrary.S7.csproj" />
+  <Project Path="PlcLibrary.Mitsubishi/PlcLibrary.Mitsubishi.csproj" />
+  <Project Path="PlcLibrary.Omron/PlcLibrary.Omron.csproj" />
+  <Project Path="PlcLibrary.AllenBradley/PlcLibrary.AllenBradley.csproj" />
+  <Project Path="PlcLibrary.Bacnet/PlcLibrary.Bacnet.csproj" />
   <Project Path="PlcLibrary.Tests/PlcLibrary.Tests.csproj" />
   <Project Path="PlcLibrary/PlcLibrary.csproj" />
 </Solution>
