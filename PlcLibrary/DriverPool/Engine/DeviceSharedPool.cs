@@ -9,6 +9,7 @@ using Polly;
 using Polly.Registry;
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -31,6 +32,7 @@ namespace PlcLibrary.DriverPool.Engine
         {
             IProtocolDriver? driver = null;
             var acquireTimeout = device.ConnectionTimeout > TimeSpan.Zero ? device.ConnectionTimeout : options.OperationTimeout;
+            var sw = Stopwatch.StartNew();
             if (!await _semaphore.WaitAsync(acquireTimeout, ct).ConfigureAwait(false))
                 throw new TimeoutException($"Unable to acquire driver for device '{device.Id}' within {acquireTimeout.TotalSeconds}s");
 
@@ -55,6 +57,9 @@ namespace PlcLibrary.DriverPool.Engine
                             await driver.ConnectAsync(token).ConfigureAwait(false);
                     }, ct).ConfigureAwait(false);
                 }
+
+                sw.Stop();
+                PlcMetrics.AcquireDuration.Record(sw.Elapsed.TotalSeconds);
                 return driver;
             }
             catch (Exception ex)

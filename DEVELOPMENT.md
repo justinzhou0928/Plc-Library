@@ -384,38 +384,96 @@ public readonly record struct DriverResult
 
 ## 连接池弹性策略
 
-每个 `DeviceSharedPool` 独立维护一条 Polly `ResiliencePipeline`，配置：
+Polly 弹性分为两级，每设备独立隔离：
 
-```json
-{
-  "DriverPool": {
-    "MaxConnectionsPerDevice": 2,
-    "MaxRetryAttempts": 3,
-    "RetryDelay": "00:00:01",
-    "CircuitBreakerMinimumThroughput": 5,
-    "CircuitBreakerDuration": "00:00:30",
-    "CircuitBreakerFailureRatio": 0.5,
-    "OperationTimeout": "00:00:10"
-  }
-}
-```
+**连接级** — `DeviceSharedPool.AcquireAsync`
 
-策略层级：
+连接获取时包入 Polly 管线，在 `ConnectAsync` / `TryReconnectAsync` 阶段生效。策略链：
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
 flowchart LR
-    重试[指数退避重试] --> 超时[OperationTimeout]
+    重试[指数退避重试 3次] --> 超时[OperationTimeout 10s]
     超时 --> CB{断路器}
-    CB -->|关闭| OK[执行]
-    CB -->|熔断| REJ[拒绝]
+    CB -->|关闭| OK[连接成功]
+    CB -->|熔断| REJ[拒绝，冷却30s]
 ```
 
-- **重试**：`OperationCanceledException` 不重试，其他异常指数退避重试最多 3 次
-- **超时**：单次连接操作不超过 10 秒
-- **断路器**：连续 5 次操作中失败率 ≥ 50% 触发熔断 30 秒，触发/半开/恢复均有日志输出
+**IO 级** — `DeviceDriverPool.ReadAsync` / `WriteAsync`
 
-每设备独立的 Pipeline 键为 `Pool:{device.Id}`，故障隔离。
+每次 `ReadAsync`/`WriteAsync` 失败时自动重试，在同一驱动实例上执行，排除 `OperationCanceledException` 和 `TimeoutRejectedException`。
+
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+flowchart LR
+    READ[driver.ReadAsync] -->|异常| R1{重试条件}
+    R1 -->|满足| READ
+    R1 -->|OCE/TRE| FAIL[向上抛]
+    R1 -->|耗尽| FAIL
+    READ -->|成功| DONE[返回结果]
+```
+
+两级策略均复用 `PoolOptions` 中的 `MaxRetryAttempts`、`RetryDelay`、`OperationTimeout` 配置项。
+
+每设备独立的 Pipeline 键为 `Pool:{device.Id}`（连接级）和 `IO:{device.Id}`（IO 级，通过 `DeviceDriverPool` 内置 builder 创建），故障隔离。
+
+## 可观测性
+
+### Meter: `PlcLibrary`
+
+通过 `System.Diagnostics.Metrics`（`System.Diagnostics.DiagnosticSource` 包，.NET 6+ 默认引用）暴露指标，无需额外 NuGet 包。
+
+| 指标名 | 类型 | 说明 |
+|---|---|---|
+| `plc.reads.total` | `Counter<long>` | 累计采集点数 |
+| `plc.read.duration` | `Histogram<double>` | ReadAsync 耗时分布（s），含 IO 重试 |
+| `plc.read.errors` | `Counter<long>` | ReadAsync 最终失败次数 |
+| `plc.write.total` | `Counter<long>` | 累计写操作数 |
+| `plc.acquire.duration` | `Histogram<double>` | 连接池获取驱动耗时（s），含 connect |
+| `plc.pipeline.dispatched` | `Counter<long>` | 管道分发点数 |
+| `plc.pipeline.dropped` | `Counter<long>` | 订阅通道溢出丢弃数 |
+
+### 接入 OpenTelemetry
+
+```csharp
+// Program.cs
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(m => m
+        .AddMeter("PlcLibrary")
+        .AddPrometheusExporter());
+```
+
+### 接入 dotnet-counters
+
+```bash
+dotnet-counters monitor -n <进程名> --counters PlcLibrary
+```
+
+实时输出：
+
+```
+[PlcLibrary]
+    plc.reads.total (points)                    15420
+    plc.read.duration (s)
+        quantile=0.50                            0.012
+        quantile=0.95                            0.087
+        quantile=0.99                            0.310
+    plc.read.errors (errors)                        2
+    plc.acquire.duration (s)
+        quantile=0.50                            1.203
+```
+
+### 指标埋点位置
+
+| 指标 | 埋点位置 |
+|---|---|
+| `plc.reads.total` | `DeviceDriverPool.ReadAsync` — IO 重试成功后 |
+| `plc.read.duration` | `DeviceDriverPool.ReadAsync` — 含 IO 重试完整耗时 |
+| `plc.read.errors` | `DeviceDriverPool.ReadAsync` — catch 块，含重试耗尽 |
+| `plc.write.total` | `DeviceDriverPool.WriteAsync` |
+| `plc.acquire.duration` | `DeviceSharedPool.AcquireAsync` — 含 connect 耗时 |
+| `plc.pipeline.dispatched` | `DriverResultPipeline.DispatchAsync` |
+| `plc.pipeline.dropped` | `DriverResultPipeline.DispatchAsync` — 订阅通道 TryWrite 失败 |
 
 ## 连接超时覆盖
 

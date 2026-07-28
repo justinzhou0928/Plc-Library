@@ -3,10 +3,11 @@
 PLC 数据采集库，提供连接池管理、定时采集调度、数据分发管道。
 
 - 协议无关驱动接口，一行注册新协议
-- 连接池 + Polly 弹性策略（重试、超时、断路器），每设备独立隔离
+- 连接池 + Polly 弹性策略（重试、超时、断路器），**每设备独立隔离**，覆盖连接和 IO 两级
 - 设备配置热更新，差量 reconcile
 - Channel 管道 fan-out 到多个 `IDataHandler`
 - 主动读写 + 自动采集双模式
+- `System.Diagnostics.Metrics` 内置可观测性，0 依赖接入 Prometheus / Grafana
 
 ## 支持的驱动
 
@@ -334,6 +335,85 @@ new TagPointConfiguration { TagId = "run", Address = "MotorRun", DataType = "boo
 ```
 
 ### 管道
+
+```json
+{
+  "Pipeline": {
+    "Capacity": 10000,
+    "MaxHandlerParallelism": 8,
+    "HandlerTimeout": "00:00:30"
+  }
+}
+```
+
+### 弹性策略
+
+Polly 弹性分为两级，每设备独立隔离：
+
+| 级别 | 作用域 | 策略 | 触发位置 |
+|---|---|---|---|
+| **连接级** | `ConnectAsync` / `TryReconnectAsync` | 重试（指数退避） + 超时 + 断路器 | `DeviceSharedPool.AcquireAsync` |
+| **IO 级** | `ReadAsync` / `WriteAsync` | 重试（指数退避） + 超时 | `DeviceDriverPool.ReadAsync` / `WriteAsync` |
+
+- **连接级断路器**：连续失败达阈值后进入熔断（默认 5 次、失败率 ≥ 50%、冷却 30s），熔断/半开/恢复均有 `ILogger` 日志。
+- **IO 级重试**：每次 `ReadAsync`/`WriteAsync` 失败时自动重试（默认 3 次），排除 `OperationCanceledException` 和 `TimeoutRejectedException`。
+- 两级策略均复用 `DriverPool` 配置节中的 `MaxRetryAttempts`、`RetryDelay`、`OperationTimeout`。
+
+## 可观测性
+
+PlcLibrary 通过 `System.Diagnostics.Metrics`（.NET 6+ 内置，零 NuGet 依赖）暴露以下指标：
+
+### Meter: `PlcLibrary`
+
+| 指标名 | 类型 | 单位 | 说明 |
+|---|---|---|---|
+| `plc.reads.total` | `Counter<long>` | points | 累计采集点位总数 |
+| `plc.read.duration` | `Histogram<double>` | s | ReadAsync 完整耗时（含 IO 重试） |
+| `plc.read.errors` | `Counter<long>` | errors | ReadAsync 最终失败次数（含重试耗尽） |
+| `plc.write.total` | `Counter<long>` | ops | 累计写操作数 |
+| `plc.acquire.duration` | `Histogram<double>` | s | 连接池获取驱动耗时（含 connect） |
+| `plc.pipeline.dispatched` | `Counter<long>` | points | 管道分发点数 |
+| `plc.pipeline.dropped` | `Counter<long>` | points | 订阅通道溢出丢弃点数 |
+
+### 接入方式
+
+**OpenTelemetry Collector**（推荐）:
+
+```bash
+dotnet add package OpenTelemetry.Exporter.Prometheus.AspNetCore
+```
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(m => m
+        .AddMeter("PlcLibrary")
+        .AddPrometheusExporter());
+```
+
+启动后访问 `/metrics` 即可被 Prometheus 抓取，Grafana 中查询 `plc_read_duration_seconds_bucket` 等指标。
+
+**dotnet-counters**（本地调试）:
+
+```bash
+dotnet-counters monitor -n MyApp --counters PlcLibrary
+```
+
+### Grafana 面板示例
+
+```
+# 采集吞吐 (points/s)
+rate(plc_reads_total[1m])
+
+# 读延迟 p50 / p99
+histogram_quantile(0.50, rate(plc_read_duration_seconds_bucket[1m]))
+histogram_quantile(0.99, rate(plc_read_duration_seconds_bucket[1m]))
+
+# 错误率
+rate(plc_read_errors_total[1m]) / rate(plc_reads_total[1m])
+
+# 通道丢弃率
+rate(plc_pipeline_dropped_total[1m])
+```
 
 ```json
 {

@@ -106,6 +106,7 @@ namespace PlcLibrary.Pipeline.Engine
 
         private async ValueTask DispatchAsync(DriverResult result, CancellationToken ct)
         {
+            PlcMetrics.PipelineDispatched.Add(1);
             var handlers = _handlers;
             if (handlers.Length > 0)
             {
@@ -127,7 +128,10 @@ namespace PlcLibrary.Pipeline.Engine
                 foreach (var (_, sub) in _subscribers)
                 {
                     if (!sub.Writer.TryWrite(result))
+                    {
+                        PlcMetrics.PipelineDropped.Add(1);
                         PipelineLog.LogSubscriberDropped(_logger, result.Address);
+                    }
                 }
             }
         }
