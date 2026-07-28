@@ -44,9 +44,17 @@ namespace PlcLibrary.Controller.Collectors
             _resilience = pipelineRegistry.GetOrAddPipeline(
                 ResiliencePipelineKeys.Push(device.Id),
                 builder => builder.AddPoolStrategies(poolOptions.Value, loggerFactory.CreateLogger("PushCollector"), device.Id));
-            _addressToTag = device.TagPoints
-                .Where(p => !string.IsNullOrEmpty(p.Address))
-                .ToDictionary(p => p.Address, p => p.TagId, StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var point in device.TagPoints.Where(p => !string.IsNullOrEmpty(p.Address)))
+            {
+                if (seen.Add(point.Address))
+                    dict[point.Address] = point.TagId;
+                else
+                    ControllerLog.LogDeviceValidationFailed(_logger, device.Id,
+                        $"Duplicate address '{point.Address}' in PushCollector, first tag '{dict[point.Address]}' wins");
+            }
+            _addressToTag = dict;
         }
 
         public async Task ExecuteAsync(CancellationToken ct)

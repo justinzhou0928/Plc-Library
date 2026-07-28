@@ -297,7 +297,11 @@ namespace PlcLibrary.OpcUa
                             var result = item.Value.Value is not null
                                 ? DriverResult.Good(addresses[idx], item.Value.Value)
                                 : DriverResult.Bad(addresses[idx], QualityCode.BadCommFailure, "Null value");
-                            onData(result, ct).AsTask();
+                            onData(result, ct).AsTask().ContinueWith(t =>
+                            {
+                                if (t.IsFaulted && t.Exception is not null)
+                                    OpcUaLog.LogReadPointFailed(_logger, t.Exception.InnerException!, addresses[idx]);
+                            }, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                         }
                         catch (Exception ex)
                         {

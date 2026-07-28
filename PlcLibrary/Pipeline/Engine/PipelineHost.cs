@@ -14,7 +14,7 @@ namespace PlcLibrary.Pipeline.Engine
         public override async Task StopAsync(CancellationToken ct)
         {
             _pipeline.StopConsuming();
-            await base.StopAsync(ct);
+            await base.StopAsync(ct).ConfigureAwait(false);
         }
 
         public override void Dispose()

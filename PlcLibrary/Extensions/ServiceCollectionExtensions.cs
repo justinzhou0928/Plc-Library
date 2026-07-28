@@ -44,13 +44,13 @@ namespace PlcLibrary.Extensions
 
             services.AddSingleton<IDeviceAccessor, DeviceDriverPool>();
 
-            services.AddSingleton<TaskScheduler>();
-            services.AddSingleton<IDeviceScheduler>(sp => sp.GetRequiredService<TaskScheduler>());
-            services.AddHostedService<TaskSchedulerHost>();
-
             services.AddSingleton<DriverResultPipeline>();
             services.AddSingleton<IDataPipeline>(sp => sp.GetRequiredService<DriverResultPipeline>());
             services.AddHostedService<PipelineHost>();
+
+            services.AddSingleton<TaskScheduler>();
+            services.AddSingleton<IDeviceScheduler>(sp => sp.GetRequiredService<TaskScheduler>());
+            services.AddHostedService<TaskSchedulerHost>();
 
             services.AddTransient<PollingCollector>();
             services.AddTransient<TaskActuator>();

@@ -147,54 +147,49 @@ namespace PlcLibrary.S7
             {
                 try
                 {
-                    var count = values.Count;
-                    var addresses = new string[count];
-                    var dataItems = new DataItem[count];
-                    var idx = 0;
-                    foreach (var kv in values)
-                    {
-                        addresses[idx] = kv.Key.Address;
-                        var item = DataItem.FromAddress(kv.Key.Address);
-                        item.Value = kv.Value;
-                        dataItems[idx++] = item;
-                    }
-
-                    await plc.WriteAsync(dataItems).ConfigureAwait(false);
-
-                    var dr = new DriverResult[count];
-                    for (var i = 0; i < count; i++)
-                        dr[i] = DriverResult.Good(addresses[i], null);
-                    return dr;
+                    return await WriteBatchAsync(plc, values).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
                     S7Log.LogBatchWriteFallback(logger, ex);
-                    var fallback = new DriverResult[values.Count];
-                    var idx = 0;
-                    foreach (var kvp in values)
-                    {
-                        try
-                        {
-                            await plc.WriteAsync(kvp.Key.Address, kvp.Value, ct).ConfigureAwait(false);
-                            fallback[idx] = DriverResult.Good(kvp.Key.Address, null);
-                        }
-                        catch (OperationCanceledException) { throw; }
-                        catch (Exception perEx)
-                        {
-                            S7Log.LogWritePointFailed(logger, perEx, kvp.Key.Address);
-                            fallback[idx] = DriverResult.Bad(kvp.Key.Address, QualityCode.BadCommFailure, perEx.Message);
-                        }
-                        idx++;
-                    }
-                    return fallback;
                 }
             }
 
+            return await WritePointsIndividuallyAsync(plc, values, ct).ConfigureAwait(false);
+        }
+
+        private static async Task<DriverResult[]> WriteBatchAsync(
+            Plc plc, IReadOnlyDictionary<TagPointConfiguration, object> values)
+        {
+            var count = values.Count;
+            var addresses = new string[count];
+            var dataItems = new DataItem[count];
+            var idx = 0;
+            foreach (var kv in values)
+            {
+                addresses[idx] = kv.Key.Address;
+                var item = DataItem.FromAddress(kv.Key.Address);
+                item.Value = kv.Value;
+                dataItems[idx++] = item;
+            }
+
+            await plc.WriteAsync(dataItems).ConfigureAwait(false);
+
+            var dr = new DriverResult[count];
+            for (var i = 0; i < count; i++)
+                dr[i] = DriverResult.Good(addresses[i], null);
+            return dr;
+        }
+
+        private async Task<DriverResult[]> WritePointsIndividuallyAsync(
+            Plc plc, IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct)
+        {
             var results = new DriverResult[values.Count];
             var index = 0;
             foreach (var kvp in values)
             {
+                ct.ThrowIfCancellationRequested();
                 try
                 {
                     await plc.WriteAsync(kvp.Key.Address, kvp.Value, ct).ConfigureAwait(false);

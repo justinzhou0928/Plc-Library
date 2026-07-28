@@ -87,12 +87,23 @@ namespace PlcLibrary.Controller.Engine
 
         internal async Task StopSchedulerAsync()
         {
-            var values = _actuators.Values;
-            var tasks = new Task[values.Count];
-            var i = 0;
-            foreach (var a in values)
-                tasks[i++] = a.StopAsync();
+            var actuators = _actuators.Values.ToArray();
+            if (actuators.Length == 0) return;
+
+            var tasks = new Task[actuators.Length];
+            for (var i = 0; i < actuators.Length; i++)
+                tasks[i] = actuators[i].StopAsync();
             await Task.WhenAll(tasks).ConfigureAwait(false);
+
+            for (var i = 0; i < actuators.Length; i++)
+            {
+                try { await actuators[i].DisposeAsync().ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { ControllerLog.LogCollectionFailed(_logger, ex, actuators[i].Device.Id); }
+            }
+
+            _actuators.Clear();
+            _activeConfigs.Clear();
             ControllerLog.LogSchedulerStopped(_logger);
         }
 
@@ -186,7 +197,7 @@ namespace PlcLibrary.Controller.Engine
         public override async Task StopAsync(CancellationToken ct)
         {
             await _scheduler.StopSchedulerAsync().ConfigureAwait(false);
-            await base.StopAsync(ct);
+            await base.StopAsync(ct).ConfigureAwait(false);
         }
 
         public override void Dispose()
