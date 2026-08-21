@@ -118,7 +118,18 @@ while (await timer.WaitForNextTickAsync(ct))
 |------|------|
 | `SemaphoreSlim` | 限制并发连接数（`MaxConnectionsPerDevice`） |
 | `ConcurrentQueue<IProtocolDriver>` | 空闲连接队列，先取后建 |
-| `ResiliencePipeline` | Polly 弹性管线（重试 + 超时 + 断路器），每设备独立 |
+| `ResiliencePipeline` | Polly 弹性管线（重试 + 超时 + 断路器），跟随连接池（`Pool:{Protocol}|{ConnectionString}`） |
+
+### 池生命周期与回收
+
+- **连接级管线键跟随连接池**（`Pool:{Protocol}|{ConnectionString}`）：多设备共享同一连接串时共享管线；池回收时一并移除。
+- **空置 TTL 回收**：`DeviceSharedPool` 维护在途借用计数 `_inUse` 与最后活动时间；`DeviceDriverPool` 内置定时器（60s 周期）扫描，空置超过 `PoolOptions.PoolIdleTimeout`（默认 10 分钟，0 禁用）且无在途借用的池被销毁（释放空闲驱动、移除弹性管线）。热更新频繁增删设备不再累积连接与管线。
+- **推送管线**：`Push:{deviceId}` 由 `PushCollector` 创建，随采集器 `DisposeAsync` 移除（订阅是专用长连接，不走池，见下文"Push 双轨设计"）。
+- **注册表**：Polly 原生 `ResiliencePipelineRegistry` 只有 `GetOrAddPipeline` 无法移除，库内使用 `ManagedResiliencePipelineRegistry`（包装字典 + `TryRemove`/`Clear`）实现生命周期管理。
+
+### Push 双轨设计（设计决策）
+
+轮询驱动（S7/Modbus/AB/...）的读操作经连接池借用/归还；`IPushProtocolDriver`（OPC UA 订阅）使用**专用长连接**——订阅状态（MonitoredItem、发布队列）绑定驱动实例，池化借用会破坏订阅语义。故 `PushCollector` 为每设备创建独立驱动实例 + 独立连接级弹性管线（`Push:{id}`），与轮询池双轨并存，二者互不干扰。
 
 连接池获取流程：
 
@@ -245,10 +256,10 @@ using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.General.Configuration;
 
-[ProtocolDriverName("Modbus")]
-public sealed class ModbusDriver(ILogger<ModbusDriver> logger, DeviceConfiguration device) : IProtocolDriver
+[ProtocolDriverName("MyProtocol")]
+public sealed class MyProtocolDriver(ILogger<MyProtocolDriver> logger, DeviceConfiguration device) : IProtocolDriver
 {
-    private readonly ModbusDriverConfig _config = ModbusDriverConfig.Parse(device.ConnectionString);
+    private readonly MyProtocolConfig _config = MyProtocolConfig.Parse(device.ConnectionString);
 
     public DriverStatus DriverStatus { get; private set; }
 
@@ -401,7 +412,7 @@ flowchart LR
 
 **IO 级** — `DeviceDriverPool.ReadAsync` / `WriteAsync`
 
-每次 `ReadAsync`/`WriteAsync` 失败时自动重试，在同一驱动实例上执行，排除 `OperationCanceledException` 和 `TimeoutRejectedException`。
+每次 `ReadAsync`/`WriteAsync` **抛出异常**时自动重试，在同一驱动实例上执行，排除 `OperationCanceledException` 和 `TimeoutRejectedException`。
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
@@ -412,6 +423,12 @@ flowchart LR
     R1 -->|耗尽| FAIL
     READ -->|成功| DONE[返回结果]
 ```
+
+**断线检测与自动重连**（驱动层契约）：
+
+- 驱动在批量读/写捕获到**传输级故障**（`SocketException`/`IOException`/`TimeoutException`/`ObjectDisposedException`，由 `TransportFailureDetector` 判定）时，应将 `DriverStatus` 置为 `Faulted`，同时保留逐点 `DriverResult.Bad` 语义（不重抛）。
+- 连接池 `DeviceSharedPool.Return` 见 `Faulted` 驱动即丢弃并释放连接额度；下次 `AcquireAsync` 创建新驱动并走连接级弹性（重试 + 断路器），实现"坏连接自动淘汰、PLC 恢复后自动重建"。
+- 点位级/业务级错误（设备返回错误码、地址不存在等）**不应**置 `Faulted`，避免误触发重建。
 
 两级策略均复用 `PoolOptions` 中的 `MaxRetryAttempts`、`RetryDelay`、`OperationTimeout` 配置项。
 
@@ -425,13 +442,38 @@ flowchart LR
 
 | 指标名 | 类型 | 说明 |
 |---|---|---|
-| `plc.reads.total` | `Counter<long>` | 累计采集点数 |
+| `plc.reads.total` | `Counter<long>` | 累计采集点数（带 device.id/device.protocol 标签） |
 | `plc.read.duration` | `Histogram<double>` | ReadAsync 耗时分布（s），含 IO 重试 |
 | `plc.read.errors` | `Counter<long>` | ReadAsync 最终失败次数 |
 | `plc.write.total` | `Counter<long>` | 累计写操作数 |
 | `plc.acquire.duration` | `Histogram<double>` | 连接池获取驱动耗时（s），含 connect |
-| `plc.pipeline.dispatched` | `Counter<long>` | 管道分发点数 |
+| `plc.pipeline.dispatched` | `Counter<long>` | 管道分发点数（带 device.id 标签） |
 | `plc.pipeline.dropped` | `Counter<long>` | 订阅通道溢出丢弃数 |
+
+### 分布式追踪（ActivitySource）
+
+库内埋点 `ActivitySource("PlcLibrary")`（见 `PlcActivity`），与指标对称——只埋不接，宿主接 OpenTelemetry 消费：
+
+| Span | 埋点位置 | 标签 |
+|------|---------|------|
+| `PlcLibrary.ReadAsync` | `DeviceDriverPool.ReadAsync` | device.id / device.protocol / point.count |
+| `PlcLibrary.WriteAsync` | `DeviceDriverPool.WriteAsync` | device.id / device.protocol / point.count |
+| `PlcLibrary.Acquire` | `DeviceSharedPool.AcquireAsync` | device.id / device.protocol |
+| `PlcLibrary.Dispatch` | `DriverResultPipeline.DispatchAsync` | device.id / tag.id / status |
+
+无监听器时开销可忽略；基础库不引用任何 OpenTelemetry 包。
+
+### 批量读设计
+
+| 驱动 | 批量方式 | 失败策略 |
+|------|---------|---------|
+| Modbus | 连续地址合并 + PDU 上限切分（组级隔离） | 组失败 → 该组 Bad + 传输级置 Faulted |
+| S7 | `ReadMultipleVarsAsync` + 逐点回退 | 批量失败 → 逐点回退 |
+| AllenBradley | `ReadMultipleAsync` 原始字节 + CIP 小端解码 | 批量失败 → 逐点回退；string 始终逐点 |
+| BACnet | `ReadPropertyMultipleAsync` 按对象分组 | 整批失败 → 全部 Bad + 传输级置 Faulted |
+| Omron | **暂未启用**：底层 `BatchReadAsync` 已确认存在，但 FINS 字节序（CDAB）与 length 单位（字/字节）无法离线验证，且库内无公共转换助手——为避免静默数据错误（见 Modbus P0 修复先例），待接入真实 FINS 设备（或回环服务器实测）后启用 | - |
+
+原则：**批量读不得引入数据正确性风险**；解码路径必须有可验证依据（Modbus 用 NModbus 返回数组、AB 用 CIP 小端规范、BACnet 用结构化结果），无法验证的字节序类优化宁可推迟。
 
 ### 接入 OpenTelemetry
 
@@ -477,4 +519,4 @@ dotnet-counters monitor -n <进程名> --counters PlcLibrary
 
 ## 连接超时覆盖
 
-`DeviceConfiguration.ConnectionTimeout` 可覆盖全局 `PoolOptions.OperationTimeout`，在 `AcquireAsync` 获取驱动时优先使用设备级超时。默认 `TimeSpan.Zero` 表示使用全局配置。`DeviceSharedPool` 的 Polly 弹性管线也按设备独立创建，断路器回调通过 `ILogger` 输出状态变更（熔断/半开/恢复）。
+`DeviceConfiguration.ConnectionTimeout` 可覆盖全局 `PoolOptions.OperationTimeout`，在 `AcquireAsync` 获取驱动时优先使用设备级超时。默认 `00:00:05`；设为 `TimeSpan.Zero` 时使用全局配置。`DeviceSharedPool` 的 Polly 弹性管线也按设备独立创建，断路器回调通过 `ILogger` 输出状态变更（熔断/半开/恢复）。

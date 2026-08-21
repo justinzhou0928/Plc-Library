@@ -21,8 +21,8 @@ PLC 数据采集库，提供连接池管理、定时采集调度、数据分发�
 | `OmronDriver` | Omron FINS TCP | 可用 |
 | `AllenBradleyDriver` | Allen-Bradley Logix Tag (CIP/EtherNet/IP) | 可用 |
 | `BacnetDriver` | BACnet/IP | 可用 |
-| `ModbusRtuDriver` | Modbus RTU | 待 NModbus 更新 |
-| `ModbusAsciiDriver` | Modbus ASCII | 待 NModbus 更新 |
+| `ModbusRtuDriver` | Modbus RTU | 可用 |
+| `ModbusAsciiDriver` | Modbus ASCII | 可用 |
 
 ## 安装
 
@@ -160,7 +160,7 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 
 示例：`host:10.0.0.1;port:502;slaveid:2`
 
-**Modbus 地址格式**：使用 5 位十进制数字前缀标记数据类型：
+**Modbus 地址格式**：`前缀 + 1-based 十进制地址`（前缀标记数据类型，地址范围 1 ~ 65536，超出或前缀不符视为配置错误）：
 
 | 前缀 | 类型 | 读写 | 示例 | 说明 |
 |------|------|:--:|------|------|
@@ -169,20 +169,23 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 | `3xxxx` | Input Register | 只读 | `30001` | 输入寄存器，16 位无符号整数 |
 | `4xxxx` | Holding Register | 读写 | `40042` | 保持寄存器，16 位无符号整数 |
 
-地址为 **1-based**（PLC 习惯），驱动内部自动转换为 0-based 偏移。连续地址自动合并为单次批量读写。
+地址为 **1-based**（PLC 习惯），驱动内部自动转换为 0-based 偏移。连续地址自动合并为单次批量读写，并按 Modbus PDU 上限自动切分（读寄存器 ≤125、线圈/离散输入 ≤2000；写寄存器 ≤123、线圈 ≤1968）。
 
-**Modbus RTU / ASCII**（待 NModbus 更新）
+**Modbus RTU / ASCII**（串口）
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | host | - | 串口号（COM3） |
 | baudrate | 9600 | 波特率 |
-| parity | None | 校验（None/Odd/Even） |
+| parity | None | 校验（None/Odd/Even/Mark/Space） |
 | databits | 8 | 数据位 |
-| stopbits | One | 停止位（One/Two） |
+| stopbits | One | 停止位（One/OnePointFive/Two） |
+| timeout | 3000 | 超时 (ms) |
 | slaveid | 1 | 从站 ID |
 
-示例：`host:COM3;baudrate:19200;parity:Even;slaveid:1`
+示例：`host:COM3;baudrate:19200;parity:Even;stopbits:One;slaveid:1`
+
+> 串口传输基于 [NModbus.Serial](https://www.nuget.org/packages/NModbus.Serial)（与 NModbus 主包同版本发布），`Parity`/`StopBits` 字符串大小写不敏感。
 
 **OPC UA**
 
@@ -224,10 +227,10 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 |------|--------|------|
 | host | 127.0.0.1 | PLC 地址 |
 | port | 9600 | 端口 |
-| timeout | 3000 | 超时 (ms) |
-| localnode | 1 | 本机 FINS 节点号 |
-| destinynode | 2 | 目标 FINS 节点号 |
-| isudp | false | 使用 UDP 传输 |
+| timeout | 3000 | 超时 (ms)，同时作用于连接与接收 |
+| localnode | 1 | ⚠️ 已解析但当前无效：底层 `FinsClient` 节点号属性为只读，无法配置 |
+| destinynode | 2 | ⚠️ 同上，暂无法配置 |
+| isudp | false | ⚠️ 已解析但当前无效：底层 FINS 客户端仅支持 TCP，UDP 传输暂不可用 |
 
 地址格式：Omron 标准 FINS 地址字符串。
 
@@ -247,7 +250,7 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 |------|--------|------|
 | host | 127.0.0.1 | PLC / 网关模块地址 |
 | port | 44818 | EtherNet/IP 端口 |
-| timeout | 5000 | 超时 (ms) |
+| timeout | 5000 | ⚠️ 连接/IO 超时由驱动池 `OperationTimeout` 兜底，本字段暂未透传底层库 |
 | path | - | 路由路径（如 `1,0` 表示背板槽位 0） |
 | useconnected | false | Class 3 连接（高频轮询时推荐开启） |
 
@@ -270,9 +273,9 @@ ControlLogix 示例：`host:192.168.1.96;path:1,0`
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | host | 127.0.0.1 | 目标设备 IP |
-| port | 47808 | BACnet/IP 端口 (0xBAC0) |
-| timeout | 5000 | 超时 (ms) |
-| deviceinstance | 0 | 目标设备实例号（0 表示使用 IP 地址通信） |
+| port | 47808 | BACnet/IP 端口（本地监听 + 远端目标均使用） |
+| timeout | 5000 | 超时 (ms)，同时用于 WhoIs 设备发现等待 |
+| deviceinstance | 0 | 目标设备实例号；0 表示直接用 host 寻址，>0 时通过 WhoIs/IAm 广播发现实例对应的网络地址（未找到则连接失败） |
 | localendpointip | - | 多网卡时指定绑定 IP |
 
 地址格式：`TYPE:INSTANCE`（如 `AV:1` = Analog Value 1、`BI:0` = Binary Input 0）。
@@ -292,7 +295,7 @@ ControlLogix 示例：`host:192.168.1.96;path:1,0`
 | OPC UA | 否 | 服务端返回 | 服务端告知类型，值透传 |
 | BACnet | 否 | 服务端返回 | `PROP_PRESENT_VALUE` 返回原始值 |
 | AllenBradley | **推荐** | `int` | 用于确定 `ReadAsync<T>` 的泛型类型 |
-| Mitsubishi | **推荐** | `Int16` | 映射为 Snet `DataType` 枚举 |
+| Mitsubishi | **推荐** | `Int32` | 映射为 Snet `DataType` 枚举 |
 | Omron | **推荐** | `int` | 分发到 `ReadInt16Async`/`ReadFloatAsync` 等方法 |
 
 支持的 DataType 值（大小写不敏感）：
@@ -329,10 +332,13 @@ new TagPointConfiguration { TagId = "run", Address = "MotorRun", DataType = "boo
     "CircuitBreakerMinimumThroughput": 5,
     "CircuitBreakerDuration": "00:00:30",
     "CircuitBreakerFailureRatio": 0.5,
-    "OperationTimeout": "00:00:10"
+    "OperationTimeout": "00:00:10",
+    "PoolIdleTimeout": "00:10:00"
   }
 }
 ```
+
+- `PoolIdleTimeout`：空闲连接池回收阈值。设备热更新移除后，其连接池空置超过该时长且无在途借用时被自动销毁（释放连接与弹性管线），避免长期运行累积。`00:00:00` 表示禁用自动回收。
 
 ### 管道
 
@@ -348,7 +354,7 @@ new TagPointConfiguration { TagId = "run", Address = "MotorRun", DataType = "boo
 
 ### 弹性策略
 
-Polly 弹性分为两级，每设备独立隔离：
+Polly 弹性分为两级（连接级每设备独立隔离；IO 级为全局共享管线）：
 
 | 级别 | 作用域 | 策略 | 触发位置 |
 |---|---|---|---|
@@ -356,12 +362,27 @@ Polly 弹性分为两级，每设备独立隔离：
 | **IO 级** | `ReadAsync` / `WriteAsync` | 重试（指数退避） + 超时 | `DeviceDriverPool.ReadAsync` / `WriteAsync` |
 
 - **连接级断路器**：连续失败达阈值后进入熔断（默认 5 次、失败率 ≥ 50%、冷却 30s），熔断/半开/恢复均有 `ILogger` 日志。
-- **IO 级重试**：每次 `ReadAsync`/`WriteAsync` 失败时自动重试（默认 3 次），排除 `OperationCanceledException` 和 `TimeoutRejectedException`。
+- **断线自动重连**：驱动在捕获到传输级故障（socket 断开、IO 超时等）时自动将自身状态置为 `Faulted`；连接池归还时丢弃坏驱动，下次采集用新连接重建（配合连接级断路器防止重连风暴）。
+- **IO 级重试**：仅当驱动 `ReadAsync`/`WriteAsync` **抛出异常**时自动重试（默认 3 次），排除 `OperationCanceledException` 和 `TimeoutRejectedException`。驱动通常将点位级失败转为 `DriverResult.Bad` 返回（不抛异常），此时由断线重连机制兜底。
 - 两级策略均复用 `DriverPool` 配置节中的 `MaxRetryAttempts`、`RetryDelay`、`OperationTimeout`。
+
+### 批量读支持
+
+| 驱动 | 批量读 | 说明 |
+|------|:--:|------|
+| Modbus | ✅ | 连续地址合并 + PDU 上限自动切分 |
+| S7 | ✅ | `ReadMultipleVarsAsync` 批量 + 逐点回退 |
+| OPC UA | ✅ | 单请求批量 Read；订阅推送逐点回调 |
+| Mitsubishi | ✅ | `WriteAsync` 字典批量 |
+| AllenBradley | ✅ | `ReadMultipleAsync` 原始字节批量 + CIP 小端本地解码（string 标签逐点） |
+| BACnet | ✅ | `ReadPropertyMultipleAsync` 按对象分组批量 |
+| Omron | ⚠️ 待定 | 底层 `BatchReadAsync` 存在，但 FINS 字节序/长度单位无法离线验证，为避免静默数据错误暂未启用，接入真实设备后可开启 |
 
 ## 可观测性
 
 PlcLibrary 通过 `System.Diagnostics.Metrics`（.NET 6+ 内置，零 NuGet 依赖）暴露以下指标：
+
+> 读/写/获取相关指标均带 `device.id`、`device.protocol` 标签（按设备维度计数），管道指标带 `device.id` 标签。
 
 ### Meter: `PlcLibrary`
 
@@ -387,10 +408,26 @@ dotnet add package OpenTelemetry.Exporter.Prometheus.AspNetCore
 builder.Services.AddOpenTelemetry()
     .WithMetrics(m => m
         .AddMeter("PlcLibrary")
-        .AddPrometheusExporter());
+        .AddPrometheusExporter())
+    .WithTracing(t => t
+        .AddSource("PlcLibrary")
+        .AddConsoleExporter()); // 或 Jaeger/OTLP
 ```
 
 启动后访问 `/metrics` 即可被 Prometheus 抓取，Grafana 中查询 `plc_read_duration_seconds_bucket` 等指标。
+
+### 分布式追踪（ActivitySource）
+
+基础库在关键路径埋点 `ActivitySource("PlcLibrary")`，宿主接入 OpenTelemetry 后即可串联"调度 → 连接池 → 驱动 → 管道 → handler"的完整链路：
+
+| Span 名称 | 埋点位置 | 标签 |
+|-----------|---------|------|
+| `PlcLibrary.ReadAsync` | `DeviceDriverPool.ReadAsync` | device.id / device.protocol / point.count |
+| `PlcLibrary.WriteAsync` | `DeviceDriverPool.WriteAsync` | device.id / device.protocol / point.count |
+| `PlcLibrary.Acquire` | `DeviceSharedPool.AcquireAsync` | device.id / device.protocol |
+| `PlcLibrary.Dispatch` | `DriverResultPipeline.DispatchAsync` | device.id / tag.id / status |
+
+无监听器时 `StartActivity` 返回 null，埋点开销可忽略；库不依赖任何 OTel 包。
 
 **dotnet-counters**（本地调试）:
 
@@ -461,7 +498,7 @@ public class MyService(IDeviceAccessor accessor)
 
 ### 设备级连接超时
 
-`DeviceConfiguration.ConnectionTimeout` 可覆盖全局 `PoolOptions.OperationTimeout`，在获取驱动时优先使用设备级配置。默认 `TimeSpan.Zero` 表示使用全局配置。
+`DeviceConfiguration.ConnectionTimeout` 可覆盖全局 `PoolOptions.OperationTimeout`，在获取驱动时优先使用设备级配置。默认 `00:00:05`；设为 `00:00:00`（`TimeSpan.Zero`）时使用全局配置。
 
 断路器状态变更（熔断/半开/恢复）通过 `ILogger` 输出 `Warning`/`Information` 级别日志，每设备独立隔离。
 
@@ -476,6 +513,33 @@ foreach (var d in health)
 ```
 
 返回 `IReadOnlyList<DeviceHealthInfo>`，每个设备包含 `DeviceId`、`Protocol`、`IsRunning`、`Error` 和 `UpdatedAt`。
+
+### 接入 ASP.NET Core HealthChecks（宿主侧适配示例）
+
+基础库只提供健康数据源，`IHealthCheck` 适配由宿主实现（约 10 行）：
+
+```csharp
+// 宿主项目：dotnet add package Microsoft.Extensions.Diagnostics.HealthChecks
+public sealed class PlcHealthCheck(IDeviceScheduler scheduler) : IHealthCheck
+{
+    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken ct = default)
+    {
+        var health = await scheduler.GetDeviceHealthAsync(ct);
+        var down = health.Where(d => !d.IsRunning).ToList();
+        return down.Count == 0
+            ? HealthCheckResult.Healthy($"devices: {health.Count}")
+            : HealthCheckResult.Degraded($"devices down: {string.Join(",", down.Select(d => d.DeviceId))}");
+    }
+}
+
+// Program.cs
+builder.Services.AddHealthChecks().AddCheck<PlcHealthCheck>("plc");
+app.MapHealthChecks("/healthz");
+```
+
+### 采集推送（OPC UA 订阅）为何不走连接池
+
+轮询类驱动（S7/Modbus/AB/...）的读操作经连接池借用/归还；而 OPC UA 订阅（`IPushProtocolDriver`）使用**专用长连接**——订阅状态（MonitoredItem、发布队列）绑定在驱动实例上，池化借用会破坏订阅语义。因此 `PushCollector` 为每个设备创建独立驱动实例，并拥有自己的连接级弹性管线（`Push:{deviceId}`，含重试/超时/断路器）；该管线随采集器销毁而移除。
 
 ## 致谢
 
