@@ -30,6 +30,7 @@ public class TaskActuatorTests
         await using var actuator = Create();
         var result = actuator.StartAsync();
         Assert.True(result.IsCompleted);
+        Assert.True(actuator.IsRunning);
     }
 
     [Fact]
@@ -39,6 +40,7 @@ public class TaskActuatorTests
         _ = actuator.StartAsync();
         var result = actuator.StartAsync();
         Assert.True(result.IsCompleted);
+        Assert.True(actuator.IsRunning);
     }
 
     [Fact]
@@ -46,6 +48,7 @@ public class TaskActuatorTests
     {
         var actuator = Create();
         await actuator.StopAsync();
+        Assert.False(actuator.IsRunning);
     }
 
     [Fact]
@@ -54,6 +57,7 @@ public class TaskActuatorTests
         var actuator = Create();
         _ = actuator.StartAsync();
         await actuator.StopAsync();
+        Assert.False(actuator.IsRunning);
     }
 
     [Fact]
@@ -63,7 +67,25 @@ public class TaskActuatorTests
         _ = actuator.StartAsync();
         await actuator.StopAsync();
         _ = actuator.StartAsync();
+        Assert.True(actuator.IsRunning);
         await actuator.StopAsync();
+        Assert.False(actuator.IsRunning);
+    }
+
+    [Fact]
+    public async Task PollingCollector_DeliversDataToPipeline()
+    {
+        _accessor.Setup(a => a.ReadAsync(_device, It.IsAny<TagPointConfiguration[]>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([DriverResult.Good("DB1.DBD0", 42)]);
+
+        var actuator = Create();
+        _ = actuator.StartAsync();
+        await Task.Delay(150);
+        await actuator.StopAsync();
+
+        _pipeline.Verify(p => p.HandleAsync(
+            It.Is<DriverResult>(r => r.Address == "DB1.DBD0" && Equals(r.Value, 42)),
+            It.IsAny<CancellationToken>()), Times.AtLeastOnce);
     }
 
     [Fact]

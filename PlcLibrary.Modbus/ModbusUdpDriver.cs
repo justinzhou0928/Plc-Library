@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using NModbus;
 using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.General.Configuration;
@@ -15,7 +15,10 @@ namespace PlcLibrary.Modbus
         private static IModbusMaster CreateMaster(string connectionString)
         {
             var config = ModbusDriverConfig.Parse(connectionString);
-            return new ModbusFactory().CreateMaster(new UdpClient(config.Host, config.Port));
+            var master = new ModbusFactory().CreateMaster(new UdpClient(config.Host, config.Port));
+            master.Transport.ReadTimeout = config.Timeout;
+            master.Transport.WriteTimeout = config.Timeout;
+            return master;
         }
     }
 }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.ComponentModel.DataAnnotations;
 
 namespace PlcLibrary.DriverPool.Models
@@ -27,5 +27,10 @@ namespace PlcLibrary.DriverPool.Models
 
         [Range(0.0, 1.0)]
         public double CircuitBreakerFailureRatio { get; set; } = 0.5;
+
+        /// <summary>空闲连接池回收阈值：池空置超过该时长且无在途借用时，销毁池并释放连接。
+        /// <c>TimeSpan.Zero</c> 表示禁用自动回收（默认启用，10 分钟）。</summary>
+        [Range(typeof(TimeSpan), "00:00:00", "01:00:00")]
+        public TimeSpan PoolIdleTimeout { get; set; } = TimeSpan.FromMinutes(10);
     }
 }

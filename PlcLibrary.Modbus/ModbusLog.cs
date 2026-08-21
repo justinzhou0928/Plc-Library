@@ -17,6 +17,10 @@ namespace PlcLibrary.Modbus
         Message = "Modbus 地址解析失败: {Address}")]
         internal static partial void LogAddressParseFailed(ILogger logger, string address);
 
+        [LoggerMessage(Level = LogLevel.Error,
+        Message = "Modbus 连接失败")]
+        internal static partial void LogConnectFailed(ILogger logger, Exception ex);
+
         [LoggerMessage(Level = LogLevel.Debug,
         Message = "Modbus 驱动已释放")]
         internal static partial void LogDriverDisposed(ILogger logger);

@@ -9,6 +9,7 @@ using PlcLibrary.Pipeline.Models;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -106,7 +107,12 @@ namespace PlcLibrary.Pipeline.Engine
 
         private async ValueTask DispatchAsync(DriverResult result, CancellationToken ct)
         {
-            PlcMetrics.PipelineDispatched.Add(1);
+            using var activity = PlcActivity.Source.StartActivity("PlcLibrary.Dispatch");
+            activity?.SetTag("device.id", result.DeviceId);
+            activity?.SetTag("tag.id", result.TagId);
+            activity?.SetTag("status", result.Status.ToString());
+
+            PlcMetrics.PipelineDispatched.Add(1, new TagList { { "device.id", result.DeviceId } });
             var handlers = _handlers;
             if (handlers.Length > 0)
             {
@@ -129,7 +135,7 @@ namespace PlcLibrary.Pipeline.Engine
                 {
                     if (!sub.Writer.TryWrite(result))
                     {
-                        PlcMetrics.PipelineDropped.Add(1);
+                        PlcMetrics.PipelineDropped.Add(1, new TagList { { "device.id", result.DeviceId } });
                         PipelineLog.LogSubscriberDropped(_logger, result.Address);
                     }
                 }

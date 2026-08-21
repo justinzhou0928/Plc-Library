@@ -4,13 +4,13 @@ using PlcLibrary.Controller.Engine;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
+using PlcLibrary.DriverPool.Engine;
 using PlcLibrary.DriverPool.Models;
 using PlcLibrary.Extensions;
 using PlcLibrary.General;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.Pipeline.Interfaces;
 using Polly;
-using Polly.Registry;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -26,6 +26,7 @@ namespace PlcLibrary.Controller.Collectors
         private readonly ResiliencePipeline _resilience;
         private readonly IDataPipeline _pipeline;
         private readonly ILogger<PushCollector> _logger;
+        private readonly ManagedResiliencePipelineRegistry _pipelineRegistry;
         private readonly IReadOnlyDictionary<string, string> _addressToTag;
 
         public PushCollector(
@@ -33,7 +34,7 @@ namespace PlcLibrary.Controller.Collectors
             DeviceConfiguration device,
             IDataPipeline pipeline,
             ILogger<PushCollector> logger,
-            ResiliencePipelineRegistry<string> pipelineRegistry,
+            ManagedResiliencePipelineRegistry pipelineRegistry,
             IOptions<PoolOptions> poolOptions,
             ILoggerFactory loggerFactory)
         {
@@ -44,6 +45,7 @@ namespace PlcLibrary.Controller.Collectors
             _resilience = pipelineRegistry.GetOrAddPipeline(
                 ResiliencePipelineKeys.Push(device.Id),
                 builder => builder.AddPoolStrategies(poolOptions.Value, loggerFactory.CreateLogger("PushCollector"), device.Id));
+            _pipelineRegistry = pipelineRegistry;
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var point in device.TagPoints.Where(p => !string.IsNullOrEmpty(p.Address)))
@@ -100,6 +102,8 @@ namespace PlcLibrary.Controller.Collectors
             catch { }
             try { await _driver.DisposeAsync().ConfigureAwait(false); }
             catch { }
+            // 随采集器销毁移除设备级弹性管线，避免热更新累积
+            _pipelineRegistry.TryRemove(ResiliencePipelineKeys.Push(_device.Id));
         }
     }
 }

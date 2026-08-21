@@ -40,5 +40,9 @@ namespace PlcLibrary.General
         [LoggerMessage(Level = LogLevel.Information,
         Message = "断路器已关闭，连接恢复正常。Device={DeviceId}")]
         internal static partial void LogCircuitBreakerClosed(ILogger logger, string deviceId);
+
+        [LoggerMessage(Level = LogLevel.Information,
+        Message = "空闲连接池已回收，释放连接与弹性管线。Device={DeviceId}")]
+        internal static partial void LogPoolRecycled(ILogger logger, string deviceId);
     }
 }

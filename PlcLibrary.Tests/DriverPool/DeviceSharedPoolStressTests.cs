@@ -6,14 +6,13 @@ using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverPool.Engine;
 using PlcLibrary.DriverPool.Models;
 using PlcLibrary.General.Configuration;
-using Polly.Registry;
 
 namespace PlcLibrary.Tests.DriverPool;
 
 public class DeviceSharedPoolStressTests
 {
     private readonly ILogger<DeviceSharedPool> _logger = NullLogger<DeviceSharedPool>.Instance;
-    private readonly ResiliencePipelineRegistry<string> _registry = new();
+    private readonly ManagedResiliencePipelineRegistry _registry = new();
     private readonly PoolOptions _options = new()
     {
         MaxConnectionsPerDevice = 4,

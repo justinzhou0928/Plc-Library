@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using PlcLibrary.DriverDomain;
 using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
@@ -58,20 +59,35 @@ namespace PlcLibrary.Mitsubishi
             await DisconnectAsync(ct).ConfigureAwait(false);
             SetState(null, DriverStatus.Connecting);
 
-            var basics = CreateBasics();
-            var operate = new MitsubishiOperate(basics);
-            var result = await operate.OnAsync().ConfigureAwait(false);
+            MitsubishiOperate? operate = null;
+            try
+            {
+                var basics = CreateBasics();
+                operate = new MitsubishiOperate(basics);
+                var result = await operate.OnAsync().ConfigureAwait(false);
 
-            if (!result.Status)
+                if (!result.Status)
+                {
+                    SetState(null, DriverStatus.Faulted);
+                    MitsubishiLog.LogConnectionFailed(_logger, new InvalidOperationException(result.Message),
+                        _config.Host, _config.Port);
+                    throw new InvalidOperationException($"Mitsubishi connection failed: {result.Message}");
+                }
+
+                SetState(operate, DriverStatus.Connected);
+                MitsubishiLog.LogConnected(_logger, _config.Host, _config.Port);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch
             {
                 SetState(null, DriverStatus.Faulted);
-                MitsubishiLog.LogConnectionFailed(_logger, new InvalidOperationException(result.Message),
-                    _config.Host, _config.Port);
-                throw new InvalidOperationException($"Mitsubishi connection failed: {result.Message}");
+                if (operate is not null)
+                {
+                    try { await operate.OffAsync().ConfigureAwait(false); } catch { }
+                    try { operate.Dispose(); } catch { }
+                }
+                throw;
             }
-
-            SetState(operate, DriverStatus.Connected);
-            MitsubishiLog.LogConnected(_logger, _config.Host, _config.Port);
         }
 
         public async Task DisconnectAsync(CancellationToken ct = default)
@@ -125,7 +141,10 @@ namespace PlcLibrary.Mitsubishi
                 {
                     for (var i = 0; i < points.Length; i++)
                     {
-                        if (data!.TryGetValue(points[i].TagId, out var value))
+                        // Snet 响应字典的 key 可能是 SN（TagId）或 AddressName，双保险查找
+                        if (data!.TryGetValue(points[i].TagId, out var value)
+                            || (!string.Equals(points[i].TagId, points[i].Address, StringComparison.OrdinalIgnoreCase)
+                                && data.TryGetValue(points[i].Address, out value)))
                         {
                             results[i] = value.Quality == QualityType.Normal
                                 ? DriverResult.Good(points[i].Address, value.ResultValue)
@@ -150,6 +169,7 @@ namespace PlcLibrary.Mitsubishi
             catch (Exception ex)
             {
                 MitsubishiLog.LogReadFailed(_logger, ex);
+                MarkFaultedIfTransport(ex);
                 for (var i = 0; i < points.Length; i++)
                     results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadCommFailure, ex.Message);
             }
@@ -167,27 +187,45 @@ namespace PlcLibrary.Mitsubishi
             var results = new DriverResult[entryList.Count];
 
             var writeValues = new ConcurrentDictionary<string, object>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (var i = 0; i < entryList.Count; i++)
+            {
+                // 同 Address 多点位写入会互相覆盖：后者标 BadConfigError，且不参与批量写
+                if (!seen.Add(entryList[i].Key.Address))
+                {
+                    results[i] = DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadConfigError,
+                        "Duplicate address in write batch");
+                    continue;
+                }
                 writeValues[entryList[i].Key.Address] = entryList[i].Value;
+            }
 
             try
             {
-                var result = await operate.WriteAsync(writeValues).ConfigureAwait(false);
-
-                for (var i = 0; i < entryList.Count; i++)
+                if (writeValues.Count > 0)
                 {
-                    results[i] = result.Status
-                        ? DriverResult.Good(entryList[i].Key.Address, null)
-                        : DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadCommFailure,
-                            result.Message ?? "Unknown error");
+                    var result = await operate.WriteAsync(writeValues).ConfigureAwait(false);
+
+                    for (var i = 0; i < entryList.Count; i++)
+                    {
+                        if (results[i].Status == QualityCode.BadConfigError) continue; // 重复地址已在前面标记
+                        results[i] = result.Status
+                            ? DriverResult.Good(entryList[i].Key.Address, null)
+                            : DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadCommFailure,
+                                result.Message ?? "Unknown error");
+                    }
                 }
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 MitsubishiLog.LogWriteFailed(_logger, ex);
+                MarkFaultedIfTransport(ex);
                 for (var i = 0; i < entryList.Count; i++)
-                    results[i] = DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadCommFailure, ex.Message);
+                {
+                    if (results[i].Status != QualityCode.BadConfigError)
+                        results[i] = DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadCommFailure, ex.Message);
+                }
             }
 
             return results;
@@ -213,7 +251,8 @@ namespace PlcLibrary.Mitsubishi
                     "A1E" => MitsubishiData.ProtocolType.MelsecA1ENet,
                     "A3C" => MitsubishiData.ProtocolType.MelsecA1EAsciiNet,
                     "FX" => MitsubishiData.ProtocolType.MelsecFxSerial,
-                    _ => MitsubishiData.ProtocolType.MelsecMcNet
+                    _ => throw new InvalidOperationException(
+                        $"Unknown Mitsubishi protocol type '{_config.ProtocolType}'. Supported: MC / A1E / A3C / FX")
                 },
             };
         }
@@ -258,6 +297,13 @@ namespace PlcLibrary.Mitsubishi
                     throw new InvalidOperationException("Mitsubishi driver is not connected");
                 return _operate;
             }
+        }
+
+        /// <summary>通信级故障时置 Faulted，连接池据此丢弃驱动并重建，使断线重连生效。</summary>
+        private void MarkFaultedIfTransport(Exception ex)
+        {
+            if (TransportFailureDetector.IsTransportFailure(ex))
+                lock (_stateLock) _status = DriverStatus.Faulted;
         }
     }
 }

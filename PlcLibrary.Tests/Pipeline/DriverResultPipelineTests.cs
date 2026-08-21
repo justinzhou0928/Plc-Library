@@ -49,7 +49,11 @@ public class DriverResultPipelineTests
     [Fact]
     public async Task HandleAsync_WritesToChannel()
     {
-        var sp = new ServiceCollection().BuildServiceProvider();
+        var handler = new Mock<IDataHandler>();
+        var services = new ServiceCollection();
+        services.AddSingleton(handler.Object);
+        var sp = services.BuildServiceProvider();
+
         var pipeline = new DriverResultPipeline(sp, _logger, _optionsWrapper.Object);
 
         var consumeTask = pipeline.ConsumeAsync(CancellationToken.None);
@@ -58,6 +62,8 @@ public class DriverResultPipelineTests
         pipeline.StopConsuming();
 
         await consumeTask;
+
+        handler.Verify(h => h.HandleAsync(It.IsAny<DriverResult>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

@@ -12,7 +12,6 @@ using PlcLibrary.General.Configuration;
 using PlcLibrary.Pipeline.Engine;
 using PlcLibrary.Pipeline.Interfaces;
 using PlcLibrary.Pipeline.Models;
-using Polly.Registry;
 using System;
 using System.Reflection;
 
@@ -40,7 +39,7 @@ namespace PlcLibrary.Extensions
 
         private static IServiceCollection AddPlcLibraryCore(this IServiceCollection services)
         {
-            services.AddSingleton<ResiliencePipelineRegistry<string>>();
+            services.AddSingleton<ManagedResiliencePipelineRegistry>();
 
             services.AddSingleton<IDeviceAccessor, DeviceDriverPool>();
 

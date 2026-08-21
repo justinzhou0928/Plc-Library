@@ -16,3 +16,9 @@ TestResults/
 *.trx
 *.coverage
 coverage.*
+
+# 构建/调试临时产物
+*.log
+.dotnet-*/
+.tmp-*/
+.tmp_*

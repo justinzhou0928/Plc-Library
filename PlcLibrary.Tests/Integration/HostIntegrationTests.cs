@@ -170,16 +170,22 @@ public class HostIntegrationTests
             var device = CreateDevice("dev-01", "host:127.0.0.1", "40001");
 
             await scheduler.ApplyDevicesAsync([device]);
-            await Task.Delay(300);
-            var countBefore = handler.Count;
+            await Task.Delay(400);
+            Assert.True(handler.Count > 0, "Expected data before removing device");
 
             await scheduler.ApplyDevicesAsync([]);
-            await Task.Delay(300);
-            var countAfter = handler.Count;
 
-            Assert.True(countBefore > 0, "Expected data before removing device");
-            Assert.True(countAfter >= countBefore, "Expected data count not to decrease");
-            Assert.Equal(countAfter, handler.Count);
+            // 等管道排空移除时刻的在途数据，然后验证计数不再增长（采集确已停止）
+            await Task.Delay(600);
+            var countAfterRemoval = handler.Count;
+            await Task.Delay(400);
+            var countStable = handler.Count;
+
+            Assert.Equal(countAfterRemoval, countStable);
+
+            // 设备列表应为空
+            var health = await scheduler.GetDeviceHealthAsync();
+            Assert.Empty(health);
         }
         finally
         {

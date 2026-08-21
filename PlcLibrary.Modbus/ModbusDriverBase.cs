@@ -1,5 +1,6 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using NModbus;
+using PlcLibrary.DriverDomain;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
@@ -35,21 +36,31 @@ namespace PlcLibrary.Modbus
 
         public Task ConnectAsync(CancellationToken ct = default)
         {
-            Disconnect(ct);
-            lock (_stateLock) _status = DriverStatus.Connecting;
-
-            var newMaster = _masterFactory();
-
-            IModbusMaster? oldMaster;
-            lock (_stateLock)
+            try
             {
-                oldMaster = _master;
-                _master = newMaster;
-                _status = DriverStatus.Connected;
-            }
+                Disconnect(ct);
+                lock (_stateLock) _status = DriverStatus.Connecting;
 
-            try { oldMaster?.Dispose(); } catch { }
-            return Task.CompletedTask;
+                var newMaster = _masterFactory();
+
+                IModbusMaster? oldMaster;
+                lock (_stateLock)
+                {
+                    oldMaster = _master;
+                    _master = newMaster;
+                    _status = DriverStatus.Connected;
+                }
+
+                try { oldMaster?.Dispose(); } catch { }
+                return Task.CompletedTask;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                lock (_stateLock) _status = DriverStatus.Faulted;
+                ModbusLog.LogConnectFailed(_logger, ex);
+                throw;
+            }
         }
 
         public Task DisconnectAsync(CancellationToken ct = default)
@@ -99,12 +110,13 @@ namespace PlcLibrary.Modbus
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    await ReadBatchAsync(master, group, results, ct).ConfigureAwait(false);
+                    await ReadBatchAsync(master, points, group, results, ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
                     ModbusLog.LogReadFailed(_logger, ex, group.Start.ToString());
+                    MarkFaultedIfTransport(ex);
                     foreach (var idx in group.Indices)
                         results[idx] = DriverResult.Bad(points[idx].Address, QualityCode.BadCommFailure, ex.Message);
                 }
@@ -135,6 +147,7 @@ namespace PlcLibrary.Modbus
                 catch (Exception ex)
                 {
                     ModbusLog.LogWriteFailed(_logger, ex, group.Start.ToString());
+                    MarkFaultedIfTransport(ex);
                     foreach (var idx in group.Indices)
                         results[idx] = DriverResult.Bad(entryList[idx].Key.Address, QualityCode.BadCommFailure, ex.Message);
                 }
@@ -150,6 +163,18 @@ namespace PlcLibrary.Modbus
         }
 
         // ─── batch infrastructure ───
+
+        private const int MaxReadBitsPerRequest = 2000;      // NModbus: 一次读线圈/离散输入上限
+        private const int MaxReadRegistersPerRequest = 125;  // NModbus: 一次读寄存器上限
+        private const int MaxWriteCoilsPerRequest = 1968;    // Modbus 写多线圈 PDU 上限 (0x7B0)
+        private const int MaxWriteRegistersPerRequest = 123; // Modbus 写多寄存器 PDU 上限 (0x7B)
+
+        private static int ReadLimit(ModbusType type)
+            => type is ModbusType.Coil or ModbusType.DiscreteInput
+                ? MaxReadBitsPerRequest : MaxReadRegistersPerRequest;
+
+        private static int WriteLimit(ModbusType type)
+            => type == ModbusType.Coil ? MaxWriteCoilsPerRequest : MaxWriteRegistersPerRequest;
 
         private readonly record struct PointInfo(int Index, ushort Offset);
 
@@ -183,11 +208,12 @@ namespace PlcLibrary.Modbus
             foreach (var kv in byType)
             {
                 kv.Value.Sort((a, b) => a.Offset.CompareTo(b.Offset));
+                var limit = ReadLimit(kv.Key);
                 BatchGroup? current = null;
 
                 foreach (var pi in kv.Value)
                 {
-                    if (current is null || pi.Offset != current.Start + current.Count)
+                    if (current is null || pi.Offset != current.Start + current.Count || current.Count >= limit)
                     {
                         current = new BatchGroup
                         {
@@ -209,32 +235,33 @@ namespace PlcLibrary.Modbus
             return groups;
         }
 
-        private async Task ReadBatchAsync(IModbusMaster master, BatchGroup group, DriverResult[] results, CancellationToken ct)
+        private async Task ReadBatchAsync(IModbusMaster master, TagPointConfiguration[] points,
+            BatchGroup group, DriverResult[] results, CancellationToken ct)
         {
             switch (group.Type)
             {
                 case ModbusType.Coil:
                     var coils = await master.ReadCoilsAsync(_slaveId, group.Start, group.Count).ConfigureAwait(false);
                     for (var i = 0; i < group.Indices.Count; i++)
-                        results[group.Indices[i]] = DriverResult.Good(results[group.Indices[i]].Address, coils[i]);
+                        results[group.Indices[i]] = DriverResult.Good(points[group.Indices[i]].Address, coils[i]);
                     break;
 
                 case ModbusType.DiscreteInput:
                     var inputs = await master.ReadInputsAsync(_slaveId, group.Start, group.Count).ConfigureAwait(false);
                     for (var i = 0; i < group.Indices.Count; i++)
-                        results[group.Indices[i]] = DriverResult.Good(results[group.Indices[i]].Address, inputs[i]);
+                        results[group.Indices[i]] = DriverResult.Good(points[group.Indices[i]].Address, inputs[i]);
                     break;
 
                 case ModbusType.InputRegister:
                     var iRegs = await master.ReadInputRegistersAsync(_slaveId, group.Start, group.Count).ConfigureAwait(false);
                     for (var i = 0; i < group.Indices.Count; i++)
-                        results[group.Indices[i]] = DriverResult.Good(results[group.Indices[i]].Address, iRegs[i]);
+                        results[group.Indices[i]] = DriverResult.Good(points[group.Indices[i]].Address, iRegs[i]);
                     break;
 
                 case ModbusType.HoldingRegister:
                     var hRegs = await master.ReadHoldingRegistersAsync(_slaveId, group.Start, group.Count).ConfigureAwait(false);
                     for (var i = 0; i < group.Indices.Count; i++)
-                        results[group.Indices[i]] = DriverResult.Good(results[group.Indices[i]].Address, hRegs[i]);
+                        results[group.Indices[i]] = DriverResult.Good(points[group.Indices[i]].Address, hRegs[i]);
                     break;
             }
         }
@@ -270,11 +297,12 @@ namespace PlcLibrary.Modbus
             foreach (var kv in byType)
             {
                 kv.Value.Sort((a, b) => a.Offset.CompareTo(b.Offset));
+                var limit = WriteLimit(kv.Key);
                 BatchGroup? current = null;
 
                 foreach (var pi in kv.Value)
                 {
-                    if (current is null || pi.Offset != current.Start + current.Count)
+                    if (current is null || pi.Offset != current.Start + current.Count || current.Count >= limit)
                     {
                         current = new BatchGroup
                         {
@@ -311,7 +339,10 @@ namespace PlcLibrary.Modbus
             {
                 var values = new ushort[group.Count];
                 for (var i = 0; i < group.Indices.Count; i++)
-                    values[i] = Convert.ToUInt16(entryList[group.Indices[i]].Value);
+                {
+                    // unchecked：负数按二进制补码写入（-1 -> 0xFFFF），避免 Convert.ToUInt16 抛 OverflowException
+                    values[i] = unchecked((ushort)Convert.ToInt64(entryList[group.Indices[i]].Value));
+                }
 
                 await master.WriteMultipleRegistersAsync(_slaveId, group.Start, values).ConfigureAwait(false);
             }
@@ -332,6 +363,13 @@ namespace PlcLibrary.Modbus
             }
         }
 
+        /// <summary>通信级故障时置 Faulted，连接池据此丢弃驱动并重建，使断线重连生效。</summary>
+        private void MarkFaultedIfTransport(Exception ex)
+        {
+            if (TransportFailureDetector.IsTransportFailure(ex))
+                lock (_stateLock) _status = DriverStatus.Faulted;
+        }
+
         internal static bool TryParseAddress(string address, out ModbusType type, out ushort offset)
         {
             type = ModbusType.Coil;
@@ -340,7 +378,7 @@ namespace PlcLibrary.Modbus
             if (string.IsNullOrEmpty(address) || address.Length < 2) return false;
 
             var prefix = address[0];
-            if (!int.TryParse(address.Substring(1), out var num) || num < 1) return false;
+            if (!int.TryParse(address.Substring(1), out var num) || num < 1 || num > 65536) return false;
 
             switch (prefix)
             {

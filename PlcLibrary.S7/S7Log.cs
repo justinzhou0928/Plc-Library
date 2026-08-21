@@ -24,5 +24,17 @@ namespace PlcLibrary.S7
         [LoggerMessage(Level = LogLevel.Debug,
         Message = "S7 点写入失败 Address={Address}")]
         internal static partial void LogWritePointFailed(ILogger logger, Exception ex, string address);
+
+        [LoggerMessage(Level = LogLevel.Error,
+        Message = "S7 连接失败 Host={Host} Port={Port}")]
+        internal static partial void LogConnectionFailed(ILogger logger, Exception ex, string host, int port);
+
+        [LoggerMessage(Level = LogLevel.Information,
+        Message = "S7 重连成功 Host={Host}")]
+        internal static partial void LogReconnected(ILogger logger, string host);
+
+        [LoggerMessage(Level = LogLevel.Error,
+        Message = "S7 重连失败 Host={Host}")]
+        internal static partial void LogReconnectFailed(ILogger logger, Exception ex, string host);
     }
 }

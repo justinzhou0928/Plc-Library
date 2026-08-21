@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using NewLife.Omron.Protocols;
+using PlcLibrary.DriverDomain;
 using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
@@ -24,37 +25,41 @@ namespace PlcLibrary.Omron
         private FinsClient? _finsClient;
         private DriverStatus _status = DriverStatus.Disconnected;
 
-        private static readonly Dictionary<Type, MethodInfo> ReadMethods;
-        private static readonly Dictionary<Type, MethodInfo> WriteMethods;
+        private static readonly Dictionary<Type, MethodInfo?> ReadMethods;
+        private static readonly Dictionary<Type, MethodInfo?> WriteMethods;
 
         static OmronDriver()
         {
             var methods = typeof(FinsClient).GetMethods(BindingFlags.Public | BindingFlags.Instance);
             ReadMethods = new()
             {
-                [typeof(bool)]   = methods.First(m => m.Name == "ReadBoolAsync"),
-                [typeof(short)]  = methods.First(m => m.Name == "ReadInt16Async"),
-                [typeof(int)]    = methods.First(m => m.Name == "ReadInt32Async"),
-                [typeof(long)]   = methods.First(m => m.Name == "ReadInt64Async"),
-                [typeof(ushort)] = methods.First(m => m.Name == "ReadUInt16Async"),
-                [typeof(uint)]   = methods.First(m => m.Name == "ReadUInt32Async"),
-                [typeof(ulong)]  = methods.First(m => m.Name == "ReadUInt64Async"),
-                [typeof(float)]  = methods.First(m => m.Name == "ReadFloatAsync"),
-                [typeof(double)] = methods.First(m => m.Name == "ReadDoubleAsync"),
+                [typeof(bool)]   = FindMethod(methods, "ReadBoolAsync", 1),
+                [typeof(short)]  = FindMethod(methods, "ReadInt16Async", 1),
+                [typeof(int)]    = FindMethod(methods, "ReadInt32Async", 1),
+                [typeof(long)]   = FindMethod(methods, "ReadInt64Async", 1),
+                [typeof(ushort)] = FindMethod(methods, "ReadUInt16Async", 1),
+                [typeof(uint)]   = FindMethod(methods, "ReadUInt32Async", 1),
+                [typeof(ulong)]  = FindMethod(methods, "ReadUInt64Async", 1),
+                [typeof(float)]  = FindMethod(methods, "ReadFloatAsync", 1),
+                [typeof(double)] = FindMethod(methods, "ReadDoubleAsync", 1),
             };
             WriteMethods = new()
             {
-                [typeof(bool)]   = methods.First(m => m.Name == "WriteBoolAsync"),
-                [typeof(short)]  = methods.First(m => m.Name == "WriteInt16Async"),
-                [typeof(int)]    = methods.First(m => m.Name == "WriteInt32Async"),
-                [typeof(long)]   = methods.First(m => m.Name == "WriteInt64Async"),
-                [typeof(ushort)] = methods.First(m => m.Name == "WriteUInt16Async"),
-                [typeof(uint)]   = methods.First(m => m.Name == "WriteUInt32Async"),
-                [typeof(ulong)]  = methods.First(m => m.Name == "WriteUInt64Async"),
-                [typeof(float)]  = methods.First(m => m.Name == "WriteFloatAsync"),
-                [typeof(double)] = methods.First(m => m.Name == "WriteDoubleAsync"),
+                [typeof(bool)]   = FindMethod(methods, "WriteBoolAsync", 2),
+                [typeof(short)]  = FindMethod(methods, "WriteInt16Async", 2),
+                [typeof(int)]    = FindMethod(methods, "WriteInt32Async", 2),
+                [typeof(long)]   = FindMethod(methods, "WriteInt64Async", 2),
+                [typeof(ushort)] = FindMethod(methods, "WriteUInt16Async", 2),
+                [typeof(uint)]   = FindMethod(methods, "WriteUInt32Async", 2),
+                [typeof(ulong)]  = FindMethod(methods, "WriteUInt64Async", 2),
+                [typeof(float)]  = FindMethod(methods, "WriteFloatAsync", 2),
+                [typeof(double)] = FindMethod(methods, "WriteDoubleAsync", 2),
             };
         }
+
+        /// <summary>按名称 + 参数个数精确匹配，避免第三方库出现重载时取错方法；找不到返回 null（调用处抛 NotSupportedException）。</summary>
+        private static MethodInfo? FindMethod(IEnumerable<MethodInfo> methods, string name, int parameterCount)
+            => methods.FirstOrDefault(m => m.Name == name && m.GetParameters().Length == parameterCount);
 
         public OmronDriver(ILogger<OmronDriver> logger, DeviceConfiguration device)
         {
@@ -72,14 +77,17 @@ namespace PlcLibrary.Omron
             await DisconnectAsync(ct).ConfigureAwait(false);
             SetState(null, DriverStatus.Connecting);
 
+            FinsClient? client = null;
             try
             {
-                var client = new FinsClient
+                client = new FinsClient
                 {
                     IpAddress = _config.Host,
                     Port = _config.Port,
                     ConnectTimeOut = _config.Timeout,
+                    ReceiveTimeOut = _config.Timeout,
                     DataFormat = DataFormat.CDAB,
+                    AutoReconnect = true,
                 };
 
                 await client.ConnectAsync().ConfigureAwait(false);
@@ -91,12 +99,17 @@ namespace PlcLibrary.Omron
             catch (Exception ex)
             {
                 SetState(null, DriverStatus.Faulted);
+                if (client is not null)
+                {
+                    try { client.Close(); } catch { }
+                    try { client.Dispose(); } catch { }
+                }
                 OmronLog.LogConnectionFailed(_logger, ex, _config.Host, _config.Port);
                 throw;
             }
         }
 
-        public async Task DisconnectAsync(CancellationToken ct = default)
+        public Task DisconnectAsync(CancellationToken ct = default)
         {
             FinsClient? old;
             lock (_stateLock)
@@ -113,6 +126,8 @@ namespace PlcLibrary.Omron
                 try { old.Dispose(); }
                 catch { }
             }
+
+            return Task.CompletedTask;
         }
 
         public async Task<bool> TryReconnectAsync(CancellationToken ct = default)
@@ -152,6 +167,7 @@ namespace PlcLibrary.Omron
                 catch (Exception ex)
                 {
                     OmronLog.LogReadPointFailed(_logger, ex, points[i].Address);
+                    MarkFaultedIfTransport(ex);
                     results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadCommFailure, ex.Message);
                 }
             }
@@ -181,6 +197,7 @@ namespace PlcLibrary.Omron
                 catch (Exception ex)
                 {
                     OmronLog.LogWritePointFailed(_logger, ex, entryList[i].Key.Address);
+                    MarkFaultedIfTransport(ex);
                     results[i] = DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadCommFailure, ex.Message);
                 }
             }
@@ -196,7 +213,7 @@ namespace PlcLibrary.Omron
 
         private static async Task<object?> ReadTypedAsync(FinsClient client, string address, Type type)
         {
-            if (!ReadMethods.TryGetValue(type, out var method))
+            if (!ReadMethods.TryGetValue(type, out var method) || method is null)
                 throw new NotSupportedException($"Omron: unsupported read type '{type.Name}'. Use int, float, bool, etc.");
 
             var task = (Task)method.Invoke(client, [address])!;
@@ -206,7 +223,7 @@ namespace PlcLibrary.Omron
 
         private static async Task WriteTypedAsync(FinsClient client, string address, object value, Type type)
         {
-            if (!WriteMethods.TryGetValue(type, out var method))
+            if (!WriteMethods.TryGetValue(type, out var method) || method is null)
                 throw new NotSupportedException($"Omron: unsupported write type '{type.Name}'. Use int, float, bool, etc.");
 
             var converted = Convert.ChangeType(value, type);
@@ -231,6 +248,13 @@ namespace PlcLibrary.Omron
                     throw new InvalidOperationException("Omron FINS driver is not connected");
                 return _finsClient;
             }
+        }
+
+        /// <summary>通信级故障时置 Faulted，连接池据此丢弃驱动并重建，使断线重连生效。</summary>
+        private void MarkFaultedIfTransport(Exception ex)
+        {
+            if (TransportFailureDetector.IsTransportFailure(ex))
+                lock (_stateLock) _status = DriverStatus.Faulted;
         }
     }
 }

@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
+using PlcLibrary.DriverDomain;
 using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
@@ -32,14 +33,29 @@ namespace PlcLibrary.S7
             await DisconnectAsync(ct).ConfigureAwait(false);
             SetState(null, DriverStatus.Connecting);
 
-            var plc = new Plc(_config.CpuType, _config.Host, _config.Port, _config.Rack, _config.Slot)
+            Plc? plc = null;
+            try
             {
-                ReadTimeout = _config.Timeout,
-                WriteTimeout = _config.Timeout
-            };
-            await plc.OpenAsync(ct).ConfigureAwait(false);
+                plc = new Plc(_config.CpuType, _config.Host, _config.Port, _config.Rack, _config.Slot)
+                {
+                    ReadTimeout = _config.Timeout,
+                    WriteTimeout = _config.Timeout
+                };
+                await plc.OpenAsync(ct).ConfigureAwait(false);
 
-            SetState(plc, DriverStatus.Connected);
+                SetState(plc, DriverStatus.Connected);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                SetState(null, DriverStatus.Faulted);
+                if (plc is not null)
+                {
+                    try { plc.Close(); } catch { }
+                }
+                S7Log.LogConnectionFailed(logger, ex, _config.Host, _config.Port);
+                throw;
+            }
         }
 
         public Task DisconnectAsync(CancellationToken ct = default)
@@ -62,11 +78,13 @@ namespace PlcLibrary.S7
             {
                 await DisconnectAsync(ct).ConfigureAwait(false);
                 await ConnectAsync(ct).ConfigureAwait(false);
+                S7Log.LogReconnected(logger, _config.Host);
                 return true;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 lock (_stateLock) _status = DriverStatus.Faulted;
+                S7Log.LogReconnectFailed(logger, ex, _config.Host);
                 return false;
             }
         }
@@ -103,6 +121,7 @@ namespace PlcLibrary.S7
                 catch (Exception ex)
                 {
                     S7Log.LogBatchReadFallback(logger, ex);
+                    MarkFaultedIfTransport(ex);
                     foreach (var idx in batchIndices)
                         fallback[idx] = true;
                 }
@@ -130,6 +149,7 @@ namespace PlcLibrary.S7
                 catch (Exception ex)
                 {
                     S7Log.LogReadPointFailed(logger, ex, points[i].Address);
+                    MarkFaultedIfTransport(ex);
                     results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadCommFailure, ex.Message);
                 }
             }
@@ -199,6 +219,7 @@ namespace PlcLibrary.S7
                 catch (Exception ex)
                 {
                     S7Log.LogWritePointFailed(logger, ex, kvp.Key.Address);
+                    MarkFaultedIfTransport(ex);
                     results[index] = DriverResult.Bad(kvp.Key.Address, QualityCode.BadCommFailure, ex.Message);
                 }
                 index++;
@@ -228,6 +249,13 @@ namespace PlcLibrary.S7
                     throw new InvalidOperationException("S7 driver is not connected");
                 return _plc;
             }
+        }
+
+        /// <summary>通信级故障时置 Faulted，连接池据此丢弃驱动并重建，使断线重连生效。</summary>
+        private void MarkFaultedIfTransport(Exception ex)
+        {
+            if (TransportFailureDetector.IsTransportFailure(ex))
+                lock (_stateLock) _status = DriverStatus.Faulted;
         }
     }
 }

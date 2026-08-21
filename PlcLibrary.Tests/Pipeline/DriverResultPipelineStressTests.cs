@@ -7,6 +7,7 @@ using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.Pipeline.Engine;
 using PlcLibrary.Pipeline.Interfaces;
 using PlcLibrary.Pipeline.Models;
+using System.Threading.Channels;
 
 namespace PlcLibrary.Tests.Pipeline;
 
@@ -58,7 +59,14 @@ public class DriverResultPipelineStressTests
     [Fact]
     public async Task ChannelBackpressure_NoItemsDropped()
     {
+        var handler = new Mock<IDataHandler>();
+        var received = new List<DriverResult>();
+        handler.Setup(h => h.HandleAsync(It.IsAny<DriverResult>(), It.IsAny<CancellationToken>()))
+            .Callback<DriverResult, CancellationToken>((r, _) => { lock (received) received.Add(r); })
+            .Returns(ValueTask.CompletedTask);
+
         var services = new ServiceCollection();
+        services.AddSingleton(handler.Object);
         var sp = services.BuildServiceProvider();
 
         var wrapper = new Mock<IOptions<PipelineOptions>>();
@@ -79,6 +87,9 @@ public class DriverResultPipelineStressTests
 
         pipeline.StopConsuming();
         await consumeTask;
+
+        // 背压（FullMode.Wait）应保证 100 条全部送达，零丢弃
+        Assert.Equal(100, received.Count);
     }
 
     [Fact]
@@ -139,5 +150,10 @@ public class DriverResultPipelineStressTests
 
         await Task.WhenAll(tasks);
         await consumeTask;
+
+        // 并发 StopConsuming 不抛异常，且通道完成后 HandleAsync 应拒绝新写入
+        Assert.True(consumeTask.IsCompletedSuccessfully);
+        await Assert.ThrowsAsync<ChannelClosedException>(
+            () => pipeline.HandleAsync(DriverResult.Good("after-stop", 1), CancellationToken.None).AsTask());
     }
 }

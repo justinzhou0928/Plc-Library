@@ -30,6 +30,7 @@ public class TaskSchedulerTests
     {
         var scheduler = Create();
         await scheduler.ApplyDevicesAsync([]);
+        Assert.Empty(await scheduler.GetDeviceHealthAsync());
     }
 
     [Fact]
@@ -38,6 +39,7 @@ public class TaskSchedulerTests
         var scheduler = Create();
         var d = ValidDevice("d1") with { Enabled = false };
         await scheduler.ApplyDevicesAsync([d]);
+        Assert.Empty(await scheduler.GetDeviceHealthAsync());
     }
 
     [Fact]
@@ -46,6 +48,7 @@ public class TaskSchedulerTests
         var scheduler = Create();
         var d = ValidDevice("d1") with { Id = "" };
         await scheduler.ApplyDevicesAsync([d]);
+        Assert.Empty(await scheduler.GetDeviceHealthAsync());
     }
 
     [Fact]
@@ -54,6 +57,7 @@ public class TaskSchedulerTests
         var scheduler = Create();
         var d = ValidDevice("d1", "UnknownProtocol");
         await scheduler.ApplyDevicesAsync([d]);
+        Assert.Empty(await scheduler.GetDeviceHealthAsync());
     }
 
     [Fact]
@@ -61,6 +65,7 @@ public class TaskSchedulerTests
     {
         var scheduler = Create();
         await scheduler.StopSchedulerAsync();
+        Assert.Empty(await scheduler.GetDeviceHealthAsync());
     }
 
     [Fact]
