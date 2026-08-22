@@ -233,6 +233,11 @@ public static S7DriverConfig Parse(string cs)
 
 `Bind<T>()` 处理 int、string、short、bool 等内置类型；第三方 enum 可能绑定失败，通过 `with` 表达式仅覆盖该字段。
 
+> **配置-消费约束**：新增的驱动配置字段**必须**在驱动源码中被消费（`_config.X` 引用）。
+> `DriverConfigConsumptionTests` 会逐一断言每个 `*DriverConfig` 公共属性都被对应驱动引用，
+> 防止"文档声称可配、代码未生效"类问题（曾出现 OPC UA security、BACnet deviceinstance 等）。
+> 若某字段确因第三方库限制无法应用，必须加入该测试的 `KnownUnused` 例外清单并注明原因。
+
 ### 1.1 数据类型映射
 
 当驱动需要根据 `TagPointConfiguration.DataType` 确定读写类型时，使用共享的 `DataTypeMapper`：

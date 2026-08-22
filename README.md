@@ -194,7 +194,7 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 | endpoint | opc.tcp://localhost:4840 | 服务器端点 |
 | username | - | 用户名（可选） |
 | password | - | 密码（可选） |
-| security | None | None / Sign / SignAndEncrypt |
+| security | None | None / Sign / SignAndEncrypt（端点实际安全模式低于配置时连接失败，不静默降级） |
 | timeout | 5000 | 超时 (ms) |
 | publishinginterval | 1000 | 订阅发布间隔 (ms) |
 | sessiontimeout | 60000 | 会话超时 (ms) |

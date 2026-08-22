@@ -14,6 +14,7 @@
 - **S7/三菱/欧姆龙/AB/BACnet `ConnectAsync` 失败泄漏与状态机**：失败路径统一释放连接对象并置 `Faulted`，不再卡在 `Connecting` 或泄漏 socket
 - **IO 超时串流风险**：IO 超时后强制断开驱动，下次获取走重连路径，避免复用状态未知的连接
 - **连接池停机边角**：池销毁后晚到的驱动归还不再抛 `ObjectDisposedException`
+- **OPC UA `security` 配置生效**：映射 `MessageSecurityMode`（None/Sign/SignAndEncrypt），端点实际安全模式低于配置时拒绝连接，不再静默降级为明文
 
 ### 新增
 
@@ -23,10 +24,11 @@
 - **分布式追踪**：`ActivitySource("PlcLibrary")` 埋点（ReadAsync/WriteAsync/Acquire/Dispatch 四类 span），宿主接 OpenTelemetry 即可链路追踪
 - **指标设备标签**：读/写/获取/管道指标携带 `device.id`/`device.protocol` 标签
 - **`TransportFailureDetector`**：统一传输级故障判定，供各驱动与后续协议扩展复用
+- **配置-消费闭环测试**：`DriverConfigConsumptionTests` 断言每个驱动配置字段都被驱动源码消费，防止"文档声称可配、代码未生效"类问题
 
 ### 测试
 
-- 191 个测试用例（原 156 → +35），覆盖：Modbus 地址保留/溢出回绕/PDU 切分/负数写/Faulted 淘汰重建、池空置回收、IO 超时强制断开、串口参数映射、S7 连接失败状态等
+- 192 个测试用例（原 156 → +36），覆盖：Modbus 地址保留/溢出回绕/PDU 切分/负数写/Faulted 淘汰重建、池空置回收、IO 超时强制断开、串口参数映射、S7 连接失败状态、配置-消费闭环等
 
 ### 破坏性变更
 
