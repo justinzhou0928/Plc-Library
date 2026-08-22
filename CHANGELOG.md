@@ -2,6 +2,17 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.0.3] - 2026-08
+
+### 新增
+
+- **S7 字符串读取/写入**：`S7Driver` 识别带长度的地址（`DB6000.DBB504.100`）与 `DataType="string"` 点位，构造 `DataItem{S7String}` 融入现有批量读/写管道（s7netplus 原生解析 2 字节头，读 `len+2` 字节）；字符串地址必须带长度，`DataType="string"` 且地址无长度时明确报配置错误
+- S7 项目开启 `InternalsVisibleTo`（驱动内部逻辑可离线测试）
+
+### 测试
+
+- 212 个测试用例（原 192 → +20），新增：S7 字符串地址解析（合法/非法）、`IsStringPoint`/`CreateDataItem` 构造行为、`S7String` 头格式往返验证
+
 ## [1.0.2] - 2026-08
 
 > 注：1.0.1 未发布（推送前版本号直接提升至 1.0.2），下述变更全部属于本版本。

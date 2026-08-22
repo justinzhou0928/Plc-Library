@@ -149,6 +149,22 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 
 示例：`host:192.168.1.1;port:102;rack:0;slot:1;cpu:S71500`
 
+地址格式：S7 标准地址（`DB21.DBX10.2`、`DB1.DBD0`、`M10.0`、`I1.0`、`Q2.0`、`T5`、`C10` 等），标量类型由地址推断，无需 `DataType`。
+
+**字符串读取**：S7 STRING 在 PLC 中占 `2 字节头（maxLen/curLen）+ 数据`，读取时地址必须**带长度**（s7netplus 的 `DataItem.FromAddress` 不解析长度后缀）：
+
+| 地址 | 说明 |
+|------|------|
+| `DB6000.DBB504.100` | 读 DB6000 从字节 504 起的 S7 STRING(100)，2 字节头自动解析 |
+
+```json
+{ "TagId": "name", "Address": "DB6000.DBB504.100" }
+```
+
+> 编码：S7 字符串默认按 ASCII 解码（s7netplus 的 `S7String.StringEncoding`），含中文时请在宿主启动时设置为 UTF-8：
+> `S7.Net.Types.S7String.StringEncoding = Encoding.UTF8;`
+> 若配置了 `DataType: "string"` 但地址未带长度，驱动会返回配置错误（防止静默读错）。
+
 **Modbus TCP / UDP**
 
 | 字段 | 默认值 | 说明 |
