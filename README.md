@@ -290,7 +290,7 @@ ControlLogix 示例：`host:192.168.1.96;path:1,0`
 
 | 驱动 | DataType 是否必需 | 未指定时的默认值 | 说明 |
 |------|:--:|------|------|
-| S7 | 否 | 地址推断 | 地址格式已含类型（`DBX`=bool, `DBW`=word） |
+| S7 | 否（string 除外） | 地址推断 | 标量由地址推断（`DBX`=bool, `DBW`=word）；**字符串需地址带长度**（`DB6000.DBB504.100` 读 S7 STRING(100)） |
 | Modbus | 否 | 地址前缀推断 | `0xxxx`=bool, `4xxxx`=ushort |
 | OPC UA | 否 | 服务端返回 | 服务端告知类型，值透传 |
 | BACnet | 否 | 服务端返回 | `PROP_PRESENT_VALUE` 返回原始值 |

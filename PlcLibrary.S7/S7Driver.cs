@@ -4,6 +4,7 @@ using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
+using PlcLibrary.DriverDomain.Parser;
 using PlcLibrary.General.Configuration;
 using S7.Net;
 using S7.Net.Types;
@@ -103,7 +104,7 @@ namespace PlcLibrary.S7
             {
                 try
                 {
-                    batchItems.Add(DataItem.FromAddress(points[i].Address));
+                    batchItems.Add(CreateDataItem(points[i]));
                     batchIndices.Add(i);
                 }
                 catch (OperationCanceledException) { throw; }
@@ -142,7 +143,11 @@ namespace PlcLibrary.S7
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    var value = await plc.ReadAsync(points[i].Address, ct).ConfigureAwait(false);
+                    object? value;
+                    if (TryParseStringAddress(points[i].Address, out var db, out var start, out var len))
+                        value = await plc.ReadAsync(DataType.DataBlock, db, start, VarType.S7String, len, 0, ct).ConfigureAwait(false);
+                    else
+                        value = await plc.ReadAsync(points[i].Address, ct).ConfigureAwait(false);
                     results[i] = DriverResult.Good(points[i].Address, value);
                 }
                 catch (OperationCanceledException) { throw; }
@@ -163,7 +168,8 @@ namespace PlcLibrary.S7
             var plc = GetPlcOrThrow();
             if (values.Count == 0) return [];
 
-            if (values.Count > 1)
+            // string 点位必须走批量写（DataItem 支持 S7String 格式），即使只有一个点位
+            if (values.Count > 1 || values.Keys.Any(IsStringPoint))
             {
                 try
                 {
@@ -189,7 +195,7 @@ namespace PlcLibrary.S7
             foreach (var kv in values)
             {
                 addresses[idx] = kv.Key.Address;
-                var item = DataItem.FromAddress(kv.Key.Address);
+                var item = CreateDataItem(kv.Key);
                 item.Value = kv.Value;
                 dataItems[idx++] = item;
             }
@@ -212,7 +218,16 @@ namespace PlcLibrary.S7
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    await plc.WriteAsync(kvp.Key.Address, kvp.Value, ct).ConfigureAwait(false);
+                    if (TryParseStringAddress(kvp.Key.Address, out var db, out var start, out var len))
+                    {
+                        // string 逐点写：S7String.ToByteArray 生成带 2 字节头的字节流，再按字节写入
+                        var bytes = S7String.ToByteArray(Convert.ToString(kvp.Value), len);
+                        await plc.WriteBytesAsync(DataType.DataBlock, db, start, bytes, ct).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await plc.WriteAsync(kvp.Key.Address, kvp.Value, ct).ConfigureAwait(false);
+                    }
                     results[index] = DriverResult.Good(kvp.Key.Address, null);
                 }
                 catch (OperationCanceledException) { throw; }
@@ -256,6 +271,60 @@ namespace PlcLibrary.S7
         {
             if (TransportFailureDetector.IsTransportFailure(ex))
                 lock (_stateLock) _status = DriverStatus.Faulted;
+        }
+
+        // ─── S7 string 支持 ───
+
+        /// <summary>
+        /// 解析 S7 STRING 地址：<c>DB{db}.DBB{startByte}.{length}</c>（如 <c>DB6000.DBB504.100</c>）。
+        /// 注意：s7netplus 的 <see cref="DataItem.FromAddress"/> 不解析长度后缀（官方注释确认），
+        /// 因此 string 点位必须显式带长度，驱动据此构造 <see cref="VarType.S7String"/> 的 DataItem。
+        /// </summary>
+        internal static bool TryParseStringAddress(string address, out int db, out int startByte, out int length)
+        {
+            db = startByte = length = 0;
+            if (string.IsNullOrEmpty(address)) return false;
+
+            var parts = address.Split('.');
+            if (parts.Length != 3) return false;
+            if (!parts[0].StartsWith("DB", StringComparison.OrdinalIgnoreCase)) return false;
+            if (!parts[1].StartsWith("DBB", StringComparison.OrdinalIgnoreCase)) return false;
+
+            return int.TryParse(parts[0].AsSpan(2), out db)
+                && int.TryParse(parts[1].AsSpan(3), out startByte)
+                && int.TryParse(parts[2], out length) && length > 0;
+        }
+
+        /// <summary>是否 S7 字符串点位：地址带长度后缀（<c>DBx.DBBx.len</c>）或显式配置了 string 类型。</summary>
+        internal static bool IsStringPoint(TagPointConfiguration point)
+        {
+            if (TryParseStringAddress(point.Address, out _, out _, out _)) return true;
+            return DataTypeMapper.Resolve(point.DataType) == typeof(string);
+        }
+
+        /// <summary>
+        /// 构造 DataItem：S7 字符串点位 → <see cref="VarType.S7String"/>（读 len+2 字节，s7netplus 自动解析 2 字节头）；
+        /// 其余点位沿用 <see cref="DataItem.FromAddress"/>（按地址推断类型）。
+        /// </summary>
+        internal static DataItem CreateDataItem(TagPointConfiguration point)
+        {
+            if (TryParseStringAddress(point.Address, out var db, out var start, out var len))
+            {
+                return new DataItem
+                {
+                    DataType = DataType.DataBlock,
+                    DB = db,
+                    VarType = VarType.S7String,
+                    StartByteAdr = start,
+                    Count = len
+                };
+            }
+
+            if (DataTypeMapper.Resolve(point.DataType) == typeof(string))
+                throw new InvalidAddressException(
+                    $"S7 string 地址必须带长度，例如 DB1.DBB100.10（当前: {point.Address}）");
+
+            return DataItem.FromAddress(point.Address);
         }
     }
 }
