@@ -45,12 +45,25 @@ namespace PlcLibrary.OpcUa
             var appConfig = CreateApplicationConfig();
             await appConfig.ValidateAsync(ApplicationType.Client, ct).ConfigureAwait(false);
 
+            var securityMode = ParseSecurityMode(_config.Security);
+            var useSecurity = securityMode != MessageSecurityMode.None;
+
             var endpointDesc = await CoreClientUtils.SelectEndpointAsync(
                 appConfig,
                 _config.Endpoint,
-                false,
+                useSecurity,
                 telemetry: null!,
                 ct).ConfigureAwait(false);
+
+            // 安全模式校验：配置了 Sign/SignAndEncrypt 时，端点实际模式不得低于要求，宁可直接失败也不静默降级
+            if (endpointDesc is null)
+                throw new InvalidOperationException($"OPC UA endpoint '{_config.Endpoint}' could not be resolved.");
+
+            if (endpointDesc.SecurityMode < securityMode)
+                throw new InvalidOperationException(
+                    $"OPC UA endpoint '{_config.Endpoint}' security mode '{endpointDesc.SecurityMode}' " +
+                    $"does not meet the configured requirement '{securityMode}'. " +
+                    $"Set security:None to allow unencrypted connections.");
 
             var endpointConfiguration = EndpointConfiguration.Create(appConfig);
             var configuredEndpoint = new ConfiguredEndpoint(null, endpointDesc, endpointConfiguration);
@@ -401,6 +414,15 @@ namespace PlcLibrary.OpcUa
                 return new UserIdentity(_config.UserName, Encoding.UTF8.GetBytes(_config.Password ?? ""));
             return new UserIdentity(new AnonymousIdentityToken());
         }
+
+        /// <summary>连接串 security 字段 → MessageSecurityMode 映射（大小写不敏感，默认 None）。</summary>
+        private static MessageSecurityMode ParseSecurityMode(string? security)
+            => security?.Trim().ToUpperInvariant() switch
+            {
+                "SIGN" => MessageSecurityMode.Sign,
+                "SIGNANDENCRYPT" => MessageSecurityMode.SignAndEncrypt,
+                _ => MessageSecurityMode.None
+            };
 
         private Session GetSessionOrThrow()
         {

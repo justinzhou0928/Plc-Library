@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using PlcLibrary.Controller.Collectors;
 using PlcLibrary.Controller.Engine;
 using PlcLibrary.Controller.Interfaces;
 using PlcLibrary.DriverDomain.Attributes;
@@ -50,9 +49,6 @@ namespace PlcLibrary.Extensions
             services.AddSingleton<TaskScheduler>();
             services.AddSingleton<IDeviceScheduler>(sp => sp.GetRequiredService<TaskScheduler>());
             services.AddHostedService<TaskSchedulerHost>();
-
-            services.AddTransient<PollingCollector>();
-            services.AddTransient<TaskActuator>();
 
             return services;
         }
