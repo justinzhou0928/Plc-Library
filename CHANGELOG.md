@@ -2,6 +2,16 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.0.4] - 2026-08
+
+### 修复
+
+- `DriverResultPipeline.DispatchAsync` 不再原地修改共享的 `ParallelOptions.CancellationToken`，改为每次分发构造局部实例：消除潜在的并发分发令牌竞争（此前依赖单消费者循环隐式保证安全）
+
+### 测试
+
+- 新增消费者取消令牌向 handler 传播的回归测试（213 个用例，原 212 → +1）
+
 ## [1.0.3] - 2026-08
 
 ### 新增
