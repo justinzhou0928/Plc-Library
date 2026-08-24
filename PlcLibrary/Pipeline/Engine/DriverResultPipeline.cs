@@ -24,7 +24,7 @@ namespace PlcLibrary.Pipeline.Engine
         private readonly ILogger<DriverResultPipeline> _logger;
         private readonly Channel<DriverResult> _channel;
         private readonly ConcurrentDictionary<Guid, Channel<DriverResult>> _subscribers = new();
-        private readonly ParallelOptions _parallelOptions;
+        private readonly int _maxHandlerParallelism;
         private readonly TimeSpan _handlerTimeout;
         private IDataHandler[] _handlers = [];
 
@@ -42,10 +42,8 @@ namespace PlcLibrary.Pipeline.Engine
                     SingleReader = true,
                     SingleWriter = false,
                 });
-            _parallelOptions = new ParallelOptions
-            {
-                MaxDegreeOfParallelism = options.Value.MaxHandlerParallelism,
-            };
+            // 不持有可变的 ParallelOptions：分发时按次构造，避免并发 DispatchAsync 竞争 CancellationToken
+            _maxHandlerParallelism = options.Value.MaxHandlerParallelism;
             _handlerTimeout = options.Value.HandlerTimeout;
         }
 
@@ -116,8 +114,12 @@ namespace PlcLibrary.Pipeline.Engine
             var handlers = _handlers;
             if (handlers.Length > 0)
             {
-                _parallelOptions.CancellationToken = ct;
-                await Parallel.ForEachAsync(handlers, _parallelOptions, async (handler, token) =>
+                var parallelOptions = new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = _maxHandlerParallelism,
+                    CancellationToken = ct,
+                };
+                await Parallel.ForEachAsync(handlers, parallelOptions, async (handler, token) =>
                 {
                     try
                     {

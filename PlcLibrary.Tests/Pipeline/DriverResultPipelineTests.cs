@@ -101,4 +101,37 @@ public class DriverResultPipelineTests
 
         await consumeTask;
     }
+
+    [Fact]
+    public async Task ConsumerCancellationToken_PropagatesToHandlers()
+    {
+        // 回归保护：DispatchAsync 按次构造 ParallelOptions，消费侧取消必须传入 handler 调用。
+        // handler 保持在途（阻塞在 release 上），确保断言时 linkedCts 尚未释放、链接仍生效。
+        var observed = new TaskCompletionSource<CancellationToken>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new Mock<IDataHandler>();
+        handler.Setup(h => h.HandleAsync(It.IsAny<DriverResult>(), It.IsAny<CancellationToken>()))
+            .Callback<DriverResult, CancellationToken>((_, token) => observed.TrySetResult(token))
+            .Returns(async () => { await release.Task; });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(handler.Object);
+        var sp = services.BuildServiceProvider();
+
+        var pipeline = new DriverResultPipeline(sp, _logger, _optionsWrapper.Object);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var consumeTask = pipeline.ConsumeAsync(cts.Token);
+
+        await pipeline.HandleAsync(DriverResult.Good("40001", 1), CancellationToken.None);
+        var handlerToken = await observed.Task;
+
+        cts.Cancel();
+        Assert.True(handlerToken.IsCancellationRequested,
+            "handler 收到的令牌应派生自 ConsumeAsync 的取消令牌");
+
+        release.SetResult();
+        pipeline.StopConsuming();
+        await consumeTask;
+    }
 }
