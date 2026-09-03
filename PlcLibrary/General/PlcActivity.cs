@@ -8,6 +8,6 @@ namespace PlcLibrary.General
     /// </summary>
     internal static class PlcActivity
     {
-        internal static readonly ActivitySource Source = new("PlcLibrary", "1.0.4");
+        internal static readonly ActivitySource Source = new("PlcLibrary", "1.1.0");
     }
 }
