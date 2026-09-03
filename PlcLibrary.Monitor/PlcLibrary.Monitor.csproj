@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <Description>PlcLibrary 实时值监控扩展包：按 (DeviceId, TagId) 缓存 PLC 最新值，仅向订阅方推送「值/状态发生变化」的点位，屏蔽轮询重复（干扰）消息。</Description>
   </PropertyGroup>
 
   <ItemGroup>
