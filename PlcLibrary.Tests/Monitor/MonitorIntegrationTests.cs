@@ -98,6 +98,32 @@ public class MonitorIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task FullPipeline_DuplicateDeviceId_FirstWins()
+    {
+        var host = BuildHost();
+        await host.StartAsync();
+        try
+        {
+            var scheduler = host.Services.GetRequiredService<IDeviceScheduler>();
+            var monitor = host.Services.GetRequiredService<IPlcMonitor>();
+
+            // 两个设备 Id 相同，但点位数量不同（用于区分 first-wins / last-wins）
+            var first = CreateDevice("dev-01", "host:127.0.0.1", "40001");
+            var second = CreateDevice("dev-01", "host:127.0.0.1;port:502", "40001", "40002");
+
+            await scheduler.ApplyDevicesAsync([first, second]);
+            await Task.Delay(500);
+
+            // first wins：只有第一个设备的 1 个点位被采集（若 last-wins 会是 2 个）
+            Assert.Single(monitor.GetDevice("dev-01"));
+        }
+        finally
+        {
+            await StopHostAsync(host);
+        }
+    }
+
     private static async Task StopHostAsync(IHost host)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));

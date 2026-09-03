@@ -88,6 +88,34 @@ public class DeviceConfigurationValidationTests
     }
 
     [Fact]
+    public void Validate_DuplicateTagId_ReturnsFalse()
+    {
+        var d = ValidDevice() with
+        {
+            TagPoints =
+            [
+                new TagPointConfiguration { TagId = "tag1", Address = "DB1.DBD0" },
+                new TagPointConfiguration { TagId = "tag1", Address = "DB1.DBD4" },
+            ]
+        };
+        Assert.False(d.Validate(out _));
+    }
+
+    [Fact]
+    public void Validate_UniqueTagIds_ReturnsTrue()
+    {
+        var d = ValidDevice() with
+        {
+            TagPoints =
+            [
+                new TagPointConfiguration { TagId = "tag1", Address = "DB1.DBD0" },
+                new TagPointConfiguration { TagId = "tag2", Address = "DB1.DBD4" },
+            ]
+        };
+        Assert.True(d.Validate(out _));
+    }
+
+    [Fact]
     public void Validate_ReturnsErrorsForInvalidFields()
     {
         var d = ValidDevice() with { Id = "", Protocol = "" };

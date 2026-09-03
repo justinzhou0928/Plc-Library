@@ -35,11 +35,15 @@ namespace PlcLibrary.General.Configuration
             List<ValidationResult> list = [];
             Validator.TryValidateObject(this, new ValidationContext(this), list, true);
 
+            var seenTagIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var tag in TagPoints)
             {
                 List<ValidationResult> tagResults = [];
                 if (!Validator.TryValidateObject(tag, new ValidationContext(tag), tagResults, true))
                     list.AddRange(tagResults);
+
+                if (!string.IsNullOrEmpty(tag.TagId) && !seenTagIds.Add(tag.TagId))
+                    list.Add(new ValidationResult($"TagId '{tag.TagId}' 重复", new[] { nameof(TagPoints) }));
             }
 
             errors = list;

@@ -55,7 +55,11 @@ namespace PlcLibrary.Controller.Engine
                         ControllerLog.LogProtocolUnregistered(_logger, d.Id, d.Protocol);
                         continue;
                     }
-                    desired[d.Id] = d;
+                    if (!desired.TryAdd(d.Id, d))
+                    {
+                        ControllerLog.LogDeviceValidationFailed(_logger, d.Id, "Id 重复，跳过");
+                        continue;
+                    }
                 }
 
                 foreach (var id in _actuators.Keys.ToArray())
