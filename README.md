@@ -40,6 +40,7 @@ dotnet add package PlcLibrary.Mitsubishi
 dotnet add package PlcLibrary.Omron
 dotnet add package PlcLibrary.AllenBradley
 dotnet add package PlcLibrary.Bacnet
+dotnet add package PlcLibrary.Monitor
 ```
 
 ## 快速开始
@@ -394,6 +395,123 @@ Polly 弹性分为两级（连接级每设备独立隔离；IO 级为全局共�
 | BACnet | ✅ | `ReadPropertyMultipleAsync` 按对象分组批量 |
 | Omron | ⚠️ 待定 | 底层 `BatchReadAsync` 存在，但 FINS 字节序/长度单位无法离线验证，为避免静默数据错误暂未启用，接入真实设备后可开启 |
 
+## 实时值监控（PlcLibrary.Monitor）
+
+可选扩展包：把采集结果按 `(DeviceId, TagId)` 缓存为「最新值」，并只把**发生变化**的点位推送给订阅方，屏蔽轮询产生的重复（干扰）消息。
+
+```bash
+dotnet add package PlcLibrary.Monitor
+```
+
+```csharp
+builder.Services
+    .AddPlcLibrary()
+    .AddDriver<S7Driver>()
+    .AddPlcMonitor();   // 默认配置；或 AddPlcMonitor(builder.Configuration) 绑定 "Monitor" 节
+```
+
+`PlcMonitor` 以 `IDataHandler` 身份挂接在采集管道上，接收所有采集结果；对每个 `(DeviceId, TagId)` 去重（值或质量状态未变则不通知），缓存最新值。宿主通过 `IPlcMonitor` 订阅：
+
+```csharp
+public sealed class MyService(IPlcMonitor monitor)
+{
+    // 读取最新值（尚未收到数据时为 null）
+    public DriverResult? Read(string deviceId, string tagId) => monitor.Get(deviceId, tagId);
+
+    // 订阅单点：先立即返回当前快照，随后仅在该点变化时产出
+    public async Task WatchAsync(CancellationToken ct)
+    {
+        await foreach (var r in monitor.SubscribeAsync("plc-001", "t1", ct))
+            Console.WriteLine($"[{r.DeviceId}] {r.Address} = {r.Value}");
+    }
+
+    // 订阅整台设备的所有变化
+    public async Task WatchDeviceAsync(CancellationToken ct)
+    {
+        await foreach (var r in monitor.SubscribeDeviceAsync("plc-001", ct))
+            Console.WriteLine($"[{r.TagId}] {r.Address} = {r.Value}");
+    }
+}
+```
+
+### 完整示例
+
+从注册到订阅的端到端流程：
+
+```csharp
+using PlcLibrary.Controller.Interfaces;
+using PlcLibrary.Extensions;
+using PlcLibrary.General.Configuration;
+using PlcLibrary.Monitor.Extensions;
+using PlcLibrary.Monitor.Interfaces;
+using PlcLibrary.S7;
+
+var builder = Host.CreateApplicationBuilder(args);
+
+var devices = new[]
+{
+    new DeviceConfiguration
+    {
+        Id = "plc-001",
+        Protocol = "S7",
+        ConnectionString = "host:10.38.103.107;port:102;rack:0;slot:0;cpu:S71200;",
+        TagPoints = new[]
+        {
+            new TagPointConfiguration { TagId = "t1", Address = "DB21.DBX10.2", DataType = "System.Boolean" },
+        },
+        CollectionInterval = TimeSpan.FromSeconds(1),
+    },
+};
+
+builder.Services
+    .AddPlcLibrary()       // 1. 先注册核心（管道 + 调度）
+    .AddDriver<S7Driver>() // 2. 再注册协议驱动
+    .AddPlcMonitor();      // 3. 最后挂监控缓存（必须在 AddPlcLibrary 之后）
+
+var host = builder.Build();
+await host.StartAsync();
+
+// 推送设备配置，采集开始
+await host.Services.GetRequiredService<IDeviceScheduler>().ApplyDevicesAsync(devices);
+
+var monitor = host.Services.GetRequiredService<IPlcMonitor>();
+
+// 拉模式：读最新值（尚未收到数据时为 null）
+if (monitor.Get("plc-001", "t1") is { } current)
+    Console.WriteLine($"{current.Address} = {current.Value}");
+
+// 推模式：只收到「发生变化」的点位，轮询重复值不会打扰宿主
+await foreach (var r in monitor.SubscribeAsync("plc-001", "t1"))
+    Console.WriteLine($"{r.Address} = {r.Value}");
+```
+
+> 生产环境通常把 `await foreach` 放进 `BackgroundService`，用 `CancellationToken` 控制退出（见上面的 `MyService` 示例）。
+
+### 点位标识
+
+缓存键由 `DeviceId` + `TagId` 复合而成。**不同设备（不同 IP/连接串）即使配置了相同的 `TagId` 或相同的协议地址（如 `DB21.DBX10.2`），也互不干扰**——同型号 PLC 只换 IP 的场景下，各设备的点位独立缓存、独立通知。协议地址保留在 `DriverResult.Address` 上，不参与键比较。
+
+### 配置（可选）
+
+```json
+{
+  "Monitor": {
+    "EntryIdleTimeout": "00:05:00"  // 缓存条目空闲超时（设备下线后自动清理），"00:00:00" 禁用
+  }
+}
+```
+
+订阅通道容量固定为 1（latest-wins）：宿主消费慢于变化速率时，只保证最终拿到最新值，中间值可能被跳过。
+
+### 指标
+
+| 指标名 | 类型 | 说明 |
+|---|---|---|
+| `plc.monitor.updates` | `Counter<long>` | 监控收到的采集点数 |
+| `plc.monitor.changes` | `Counter<long>` | 值/状态变化并推送的点数 |
+
+与基础库共用 Meter `PlcLibrary`，宿主接入 OpenTelemetry 无需额外 `AddMeter`。
+
 ## 可观测性
 
 PlcLibrary 通过 `System.Diagnostics.Metrics`（.NET 6+ 内置，零 NuGet 依赖）暴露以下指标：
@@ -490,6 +608,7 @@ rate(plc_pipeline_dropped_total[1m])
 | `IProtocolDriver` | 协议驱动实现（开发文档见 [DEVELOPMENT.md](./DEVELOPMENT.md)） |
 | `IDriverFactory` | 驱动工厂（通常用 `AddDriver<T>` 替代） |
 | `IDataPipeline` | 数据管道（通常不需要直接使用） |
+| `IPlcMonitor` | 实时值监控缓存（`PlcLibrary.Monitor` 包），缓存最新值并订阅变化 |
 
 ### 主动读写
 

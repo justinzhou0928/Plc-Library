@@ -30,6 +30,8 @@ flowchart LR
 
 分层原则：上层依赖下层，下层不感知上层。`Channel<DriverResult>` 解耦调度层与管道层。
 
+可选扩展包 `PlcLibrary.Monitor` 在应用层之上提供「实时值监控缓存」：它本身实现 `IDataHandler` 挂接管道，按 `(DeviceId, TagId)` 缓存最新值，仅把值或质量状态发生变化的点位推送给宿主订阅方（`IPlcMonitor`），屏蔽轮询产生的重复（干扰）消息。订阅通道容量固定为 1（latest-wins）。
+
 ## 运行时序列
 
 ```mermaid
@@ -525,3 +527,30 @@ dotnet-counters monitor -n <进程名> --counters PlcLibrary
 ## 连接超时覆盖
 
 `DeviceConfiguration.ConnectionTimeout` 可覆盖全局 `PoolOptions.OperationTimeout`，在 `AcquireAsync` 获取驱动时优先使用设备级超时。默认 `00:00:05`；设为 `TimeSpan.Zero` 时使用全局配置。`DeviceSharedPool` 的 Polly 弹性管线也按设备独立创建，断路器回调通过 `ILogger` 输出状态变更（熔断/半开/恢复）。
+
+## 测试
+
+> 强制规则见 [AGENTS.md](./AGENTS.md)：**每次新增或任务完成后必须运行测试并全部通过**，构建必须 0 警告 0 错误。
+
+```bash
+# 全部测试
+dotnet test PlcLibrary.Tests/PlcLibrary.Tests.csproj -c Debug
+
+# 只跑监控扩展包相关测试
+dotnet test PlcLibrary.Tests/PlcLibrary.Tests.csproj -c Debug --filter "FullyQualifiedName~PlcLibrary.Tests.Monitor"
+```
+
+### 可离线执行的测试（无硬件依赖）
+
+| 测试文件 | 覆盖 |
+|---|---|
+| `PlcLibrary.Tests/Monitor/PlcMonitorTests.cs` | 缓存读取/快照、复合键跨设备隔离、去重、质量变化、并发（1000 次同值只通知一次）、取消、TTL 淘汰 |
+| `PlcLibrary.Tests/Monitor/MonitorIntegrationTests.cs` | 宿主 DI 装配端到端、去重（不变值不重复推送） |
+| `PlcLibrary.Tests/Monitor/ModbusLoopbackIntegrationTests.cs` | 真实 Modbus TCP 回环（本机起 NModbus 从站）：单点变化、设备级订阅、多设备同地址隔离 |
+
+其余既有测试覆盖：驱动配置/批量读写、连接池弹性与回收、管道分发与背压、调度 reconcile、协议地址解析等（`dotnet test` 全量执行）。
+
+### 无法离线执行的测试（需真实设备/服务端）
+
+- **S7 / OPC UA 真实回环**：S7 无官方服务端，OPC UA 起服务端较重——待接入真实设备后补充。
+- **背压极端场景**（订阅方极慢时的 latest-wins 行为）与 **eviction 定时器周期触发**：当前测试直接调用 `EvictStaleEntries()`，未覆盖 60s 定时器触发路径。

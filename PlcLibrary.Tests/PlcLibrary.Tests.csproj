@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PlcLibrary\PlcLibrary.csproj" />
+    <ProjectReference Include="..\PlcLibrary.Monitor\PlcLibrary.Monitor.csproj" />
     <ProjectReference Include="..\PlcLibrary.OpcUa\PlcLibrary.OpcUa.csproj" />
     <ProjectReference Include="..\PlcLibrary.S7\PlcLibrary.S7.csproj" />
     <ProjectReference Include="..\PlcLibrary.Modbus\PlcLibrary.Modbus.csproj" />

@@ -8,4 +8,5 @@
   <Project Path="PlcLibrary.Bacnet/PlcLibrary.Bacnet.csproj" />
   <Project Path="PlcLibrary.Tests/PlcLibrary.Tests.csproj" />
   <Project Path="PlcLibrary/PlcLibrary.csproj" />
+  <Project Path="PlcLibrary.Monitor/PlcLibrary.Monitor.csproj" />
 </Solution>
