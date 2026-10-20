@@ -2,6 +2,25 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.1.1] - 2026-10-20
+
+### 修复
+
+- **OPC UA 连接阶段 `BadConfigurationError`**：`CreateApplicationConfig()` 补全 `TrustedIssuerCertificates`，并新增配置项 `PkiIssuerPath`（默认 `PlcLibrary.OpcUa/pki/issuer`）。此前缺少该项，`ValidateAsync(ApplicationType.Client)` 会在任何网络请求之前抛 `TrustedIssuerCertificates StorePath must be specified.`，导致 `ApplyDevicesAsync` 的采集与 `IDeviceAccessor.ReadAsync` 全部失败；`security:None` + 匿名登录也无法规避
+- **OPC UA 推送订阅启动即抛 `ArgumentNullException`**：`Opc.Ua.Client 1.5.378.156` 中 `new Subscription(null!, false)` / `new MonitoredItem(null!, false, false)` 会命中“从 template 复制”的重载并抛 `ArgumentNullException (template)`。改用 `SubscriptionOptions` / `MonitoredItemOptions` 构造，`StartPushingAsync` 可正常建立订阅并推送数据
+- OPC UA 客户端配置构建抽为 `internal static CreateApplicationConfig(OpcUaDriverConfig)` 并开启 `InternalsVisibleTo`，使证书存储配置可离线校验
+
+### 文档
+
+- README 补充 OPC UA 完整可运行控制台 demo：宿主注册、设备配置、`IDataHandler` 推送处理、`IDeviceAccessor` 主动读，以及 `Protocol = "OPC_UA"` 的精确匹配说明
+- README 驱动表补充每个驱动的 `Protocol` 注册名（精确匹配、区分大小写），并补充 OPC UA 完整设备配置示例、四个 PKI 路径字段以及“配置校验先于网络连接”的说明
+
+### 测试
+
+- 新增 OPC UA 离线配置校验测试：断言四项证书存储路径均已绑定，并直接调用 `ValidateAsync(ApplicationType.Client)`，无需真实服务端即可覆盖“配置项漏填”类缺陷
+- 新增 OPC UA 订阅构造回归测试：`CreateSubscription` / `CreateMonitoredItem` 使用 options 重载，覆盖采样间隔、队列长度与 `DiscardOldest`
+- 测试总数 233 → 239（新增 2 个配置校验 + 1 个 PKI 解析 + 3 个订阅构造用例）
+
 ## [1.1.0] - 2026-08
 
 ### 新增

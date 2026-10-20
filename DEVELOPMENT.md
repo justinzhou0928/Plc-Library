@@ -352,6 +352,8 @@ public sealed class MyProtocolDriver(ILogger<MyProtocolDriver> logger, DeviceCon
 builder.Services.AddDriver<ModbusDriver>();
 ```
 
+> `DeviceConfiguration.Protocol` 必须与 `[ProtocolDriverName]` 的值**完全一致（区分大小写）**。`TaskScheduler` 按字符串精确匹配，别名（如 `"OPC UA"` 之于 `"OPC_UA"`）不会报错，但设备会被记录 `LogProtocolUnregistered` 后跳过。
+
 ## 接口参考
 
 ### IProtocolDriver
@@ -547,6 +549,9 @@ dotnet test PlcLibrary.Tests/PlcLibrary.Tests.csproj -c Debug --filter "FullyQua
 | `PlcLibrary.Tests/Monitor/PlcMonitorTests.cs` | 缓存读取/快照、复合键跨设备隔离、去重、质量变化、并发（1000 次同值只通知一次）、取消、TTL 淘汰 |
 | `PlcLibrary.Tests/Monitor/MonitorIntegrationTests.cs` | 宿主 DI 装配端到端、去重（不变值不重复推送） |
 | `PlcLibrary.Tests/Monitor/ModbusLoopbackIntegrationTests.cs` | 真实 Modbus TCP 回环（本机起 NModbus 从站）：单点变化、设备级订阅、多设备同地址隔离 |
+| `PlcLibrary.Tests/OpcUa/OpcUaDriverConfigurationTests.cs` | OPC UA 客户端证书存储配置离线校验（`ValidateAsync(ApplicationType.Client)`），无需真实服务端 |
+| `PlcLibrary.Tests/OpcUa/OpcUaDriverSubscriptionTests.cs` | OPC UA `Subscription`/`MonitoredItem` 构造重载回归（采样间隔、队列长度、`DiscardOldest`），无需真实服务端 |
+| `PlcLibrary.Tests/Drivers/DriverConfigConsumptionTests.cs` | 配置-消费闭环：每个 `*DriverConfig` 公共属性都被驱动源码引用 |
 
 其余既有测试覆盖：驱动配置/批量读写、连接池弹性与回收、管道分发与背压、调度 reconcile、协议地址解析等（`dotnet test` 全量执行）。
 

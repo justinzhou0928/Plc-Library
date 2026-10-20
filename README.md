@@ -11,18 +11,20 @@ PLC 数据采集库，提供连接池管理、定时采集调度、数据分发�
 
 ## 支持的驱动
 
-| 驱动 | 协议 | 状态 |
-|------|------|------|
-| `S7Driver` | Siemens S7 (S7-200/300/400/1200/1500) | 可用 |
-| `ModbusTcpDriver` | Modbus TCP | 可用 |
-| `ModbusUdpDriver` | Modbus UDP | 可用 |
-| `OpcUaDriver` | OPC UA | 可用 |
-| `MitsubishiDriver` | Mitsubishi MC / A1E / FX | 可用 |
-| `OmronDriver` | Omron FINS TCP | 可用 |
-| `AllenBradleyDriver` | Allen-Bradley Logix Tag (CIP/EtherNet/IP) | 可用 |
-| `BacnetDriver` | BACnet/IP | 可用 |
-| `ModbusRtuDriver` | Modbus RTU | 可用 |
-| `ModbusAsciiDriver` | Modbus ASCII | 可用 |
+| 驱动 | `Protocol` 值 | 协议 | 状态 |
+|------|---------------|------|------|
+| `S7Driver` | `S7` | Siemens S7 (S7-200/300/400/1200/1500) | 可用 |
+| `ModbusTcpDriver` | `Modbus_TCP` | Modbus TCP | 可用 |
+| `ModbusUdpDriver` | `Modbus_UDP` | Modbus UDP | 可用 |
+| `OpcUaDriver` | `OPC_UA` | OPC UA | 可用 |
+| `MitsubishiDriver` | `Mitsubishi` | Mitsubishi MC / A1E / FX | 可用 |
+| `OmronDriver` | `Omron_FINS` | Omron FINS TCP | 可用 |
+| `AllenBradleyDriver` | `AllenBradley` | Allen-Bradley Logix Tag (CIP/EtherNet/IP) | 可用 |
+| `BacnetDriver` | `BACnet` | BACnet/IP | 可用 |
+| `ModbusRtuDriver` | `Modbus_RTU` | Modbus RTU | 可用 |
+| `ModbusAsciiDriver` | `Modbus_ASCII` | Modbus ASCII | 可用 |
+
+> `DeviceConfiguration.Protocol` 必须与驱动上的 `[ProtocolDriverName]` **完全一致（区分大小写）**，调度器按字符串精确匹配。写成 `"OPC UA"`、`"OpcUa"` 等别名不会抛异常，但该设备会被跳过并记录 `LogProtocolUnregistered` 错误日志。
 
 ## 安装
 
@@ -216,8 +218,97 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 | publishinginterval | 1000 | 订阅发布间隔 (ms) |
 | sessiontimeout | 60000 | 会话超时 (ms) |
 | autoacceptcertificate | false | 自动接受证书（生产环境应设为 false） |
+| pkiownpath | PlcLibrary.OpcUa/pki/own | 应用证书存储目录 |
+| pkitrustedpath | PlcLibrary.OpcUa/pki/trusted | 受信任对端证书存储目录 |
+| pkiissuerpath | PlcLibrary.OpcUa/pki/issuer | 受信任颁发者证书存储目录（必填，不能为空） |
+| pkirejectedpath | PlcLibrary.OpcUa/pki/rejected | 被拒绝证书存储目录 |
 
 示例：`endpoint:opc.tcp://10.0.0.1:4840;security:None;timeout:10000`
+
+> OPC UA 客户端在建立连接前会校验 `ApplicationCertificate`、`TrustedPeerCertificates`、`TrustedIssuerCertificates` 三项存储配置。即使使用 `security:None` + 匿名登录，`pkiissuerpath` 也不能为空，否则连接阶段直接抛 `BadConfigurationError`（`TrustedIssuerCertificates StorePath must be specified.`），与服务器是否可达无关。四个 PKI 目录需对运行账户可读写，建议由宿主预先创建；相对路径基于进程工作目录。
+
+**完整可运行示例（控制台 + 推送订阅）**：
+
+```csharp
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using PlcLibrary.Controller.Interfaces;
+using PlcLibrary.DriverDomain.Models;
+using PlcLibrary.Extensions;
+using PlcLibrary.General.Configuration;
+using PlcLibrary.OpcUa;
+using PlcLibrary.Pipeline.Interfaces;
+
+var builder = Host.CreateApplicationBuilder(args);
+builder.Logging.SetMinimumLevel(LogLevel.Information);
+
+var device = new DeviceConfiguration
+{
+    Id = "line-01",
+    Name = "1号线",
+    // 必须与 [ProtocolDriverName("OPC_UA")] 完全一致，写 "OPC UA" 会被跳过
+    Protocol = "OPC_UA",
+    ConnectionString = "endpoint:opc.tcp://10.0.0.1:4840;security:None;timeout:10000;autoacceptcertificate:true;",
+    TagPoints =
+    [
+        new TagPointConfiguration
+        {
+            TagId = "MaterialBarcode1",
+            Address = "ns=2;s=SomeStringTag",   // OPC UA NodeId 字符串
+            DataType = "string",                // 可选，驱动直接透传服务端返回类型
+            QueueSize = 1,
+        },
+    ],
+    // OPC UA 是推送驱动，CollectionInterval 不参与订阅采集
+    CollectionInterval = TimeSpan.FromSeconds(1),
+};
+
+builder.Services
+    .AddPlcLibrary()
+    .AddDriver<OpcUaDriver>()
+    .AddSingleton<IDataHandler, ConsoleHandler>();
+
+var host = builder.Build();
+await host.StartAsync();
+
+await host.Services.GetRequiredService<IDeviceScheduler>().ApplyDevicesAsync([device]);
+await host.WaitForShutdownAsync();
+
+internal sealed class ConsoleHandler : IDataHandler
+{
+    public ValueTask HandleAsync(DriverResult result, CancellationToken ct)
+    {
+        Console.WriteLine(
+            $"[{result.DeviceId}/{result.TagId}] {result.Address} = {result.Value} ({result.Status})");
+        return ValueTask.CompletedTask;
+    }
+}
+```
+
+运行后，服务端点位变化会通过订阅回调打印：
+
+```text
+[line-01/MaterialBarcode1] ns=2;s=SomeStringTag = 165202#51080#261019#0017 (Good)
+```
+
+主动读取同一设备：
+
+```csharp
+using PlcLibrary.DriverDomain.Interfaces;
+
+var accessor = host.Services.GetRequiredService<IDeviceAccessor>();
+var values = await accessor.ReadAsync(device, device.TagPoints);
+foreach (var value in values)
+    Console.WriteLine($"{value.TagId} = {value.Value} ({value.Status})");
+```
+
+说明：
+
+- OPC UA 驱动实现 `IPushProtocolDriver`，`ApplyDevicesAsync` 后会建立订阅并持续推送；`CollectionInterval` 对推送驱动无效。
+- `Address` 使用 OPC UA `NodeId` 字符串（如 `ns=2;s=SomeStringTag`、`ns=2;i=1234`）。
+- `DataType` 可选；OPC UA 直接透传服务端返回的值。
+- 若服务端不可达，`ConnectAsync` 会报网络错误（如 `SocketException 10061`），这与证书配置错误不同；配置校验在连接前完成。
 
 **Mitsubishi**
 

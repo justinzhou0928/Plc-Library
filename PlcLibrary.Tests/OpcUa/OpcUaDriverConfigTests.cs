@@ -15,6 +15,10 @@ public class OpcUaDriverConfigTests
         Assert.Equal(1000, config.PublishingInterval);
         Assert.Equal(60000, config.SessionTimeout);
         Assert.False(config.AutoAcceptCertificate);
+        Assert.Equal("PlcLibrary.OpcUa/pki/own", config.PkiOwnPath);
+        Assert.Equal("PlcLibrary.OpcUa/pki/trusted", config.PkiTrustedPath);
+        Assert.Equal("PlcLibrary.OpcUa/pki/rejected", config.PkiRejectedPath);
+        Assert.Equal("PlcLibrary.OpcUa/pki/issuer", config.PkiIssuerPath);
     }
 
     [Fact]
@@ -47,6 +51,17 @@ public class OpcUaDriverConfigTests
         Assert.Equal("Sign", config.Security);
         Assert.False(config.AutoAcceptCertificate);
         Assert.Equal(2000, config.PublishingInterval);
+    }
+
+    [Fact]
+    public void Parse_PkiPaths()
+    {
+        var config = OpcUaDriverConfig.Parse(
+            "pkiownpath:pki/own;pkitrustedpath:pki/trusted;pkirejectedpath:pki/rejected;pkiissuerpath:pki/issuer");
+        Assert.Equal("pki/own", config.PkiOwnPath);
+        Assert.Equal("pki/trusted", config.PkiTrustedPath);
+        Assert.Equal("pki/rejected", config.PkiRejectedPath);
+        Assert.Equal("pki/issuer", config.PkiIssuerPath);
     }
 
     [Fact]

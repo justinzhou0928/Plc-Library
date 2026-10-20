@@ -42,7 +42,7 @@ namespace PlcLibrary.OpcUa
             await DisconnectAsync(ct).ConfigureAwait(false);
             SetStatus(DriverStatus.Connecting);
 
-            var appConfig = CreateApplicationConfig();
+            var appConfig = CreateApplicationConfig(_config);
             await appConfig.ValidateAsync(ApplicationType.Client, ct).ConfigureAwait(false);
 
             var securityMode = ParseSecurityMode(_config.Security);
@@ -247,15 +247,7 @@ namespace PlcLibrary.OpcUa
         {
             var session = GetSessionOrThrow();
 
-            var sub = new Subscription(null!, false)
-            {
-                PublishingInterval = _config.PublishingInterval,
-                KeepAliveCount = 10,
-                LifetimeCount = 20,
-                MaxNotificationsPerPublish = 1000,
-                Priority = 0,
-                PublishingEnabled = true
-            };
+            var sub = CreateSubscription(_config);
 
             var validPoints = new (int OriginalIndex, string Address, NodeId NodeId)[points.Length];
             var vpCount = 0;
@@ -279,16 +271,7 @@ namespace PlcLibrary.OpcUa
                 for (var i = 0; i < vpCount; i++)
                 {
                     var (origIdx, _, nodeId) = validPoints[i];
-                    var item = new MonitoredItem(null!, false, false)
-                    {
-                        DisplayName = points[origIdx].TagId,
-                        StartNodeId = nodeId,
-                        AttributeId = Attributes.Value,
-                        SamplingInterval = points[origIdx].SamplingInterval > 0
-                            ? points[origIdx].SamplingInterval : _config.PublishingInterval,
-                        QueueSize = (uint)Math.Max(1, points[origIdx].QueueSize),
-                        DiscardOldest = true
-                    };
+                    var item = CreateMonitoredItem(points[origIdx], nodeId, _config.PublishingInterval);
                     sub.AddItem(item);
                 }
 
@@ -372,7 +355,32 @@ namespace PlcLibrary.OpcUa
             OpcUaLog.LogDisposed(_logger);
         }
 
-        private ApplicationConfiguration CreateApplicationConfig()
+        internal static Subscription CreateSubscription(OpcUaDriverConfig config)
+            => new(null!, new SubscriptionOptions
+            {
+                PublishingInterval = config.PublishingInterval,
+                KeepAliveCount = 10,
+                LifetimeCount = 20,
+                MaxNotificationsPerPublish = 1000,
+                Priority = 0,
+                PublishingEnabled = true
+            });
+
+        internal static MonitoredItem CreateMonitoredItem(
+            TagPointConfiguration point, NodeId nodeId, int defaultSamplingInterval)
+            => new(null!, new MonitoredItemOptions
+            {
+                DisplayName = point.TagId,
+                StartNodeId = nodeId,
+                AttributeId = Attributes.Value,
+                SamplingInterval = point.SamplingInterval > 0
+                    ? point.SamplingInterval
+                    : defaultSamplingInterval,
+                QueueSize = (uint)Math.Max(1, point.QueueSize),
+                DiscardOldest = true
+            });
+
+        internal static ApplicationConfiguration CreateApplicationConfig(OpcUaDriverConfig driverConfig)
         {
             var config = new ApplicationConfiguration
             {
@@ -383,25 +391,30 @@ namespace PlcLibrary.OpcUa
                     ApplicationCertificate = new CertificateIdentifier
                     {
                         StoreType = CertificateStoreType.Directory,
-                        StorePath = _config.PkiOwnPath,
+                        StorePath = driverConfig.PkiOwnPath,
                         SubjectName = "CN=PlcLibrary OPC UA Client"
                     },
                     TrustedPeerCertificates = new CertificateTrustList
                     {
                         StoreType = CertificateStoreType.Directory,
-                        StorePath = _config.PkiTrustedPath
+                        StorePath = driverConfig.PkiTrustedPath
+                    },
+                    TrustedIssuerCertificates = new CertificateTrustList
+                    {
+                        StoreType = CertificateStoreType.Directory,
+                        StorePath = driverConfig.PkiIssuerPath
                     },
                     RejectedCertificateStore = new CertificateStoreIdentifier
                     {
                         StoreType = CertificateStoreType.Directory,
-                        StorePath = _config.PkiRejectedPath
+                        StorePath = driverConfig.PkiRejectedPath
                     },
-                    AutoAcceptUntrustedCertificates = _config.AutoAcceptCertificate,
+                    AutoAcceptUntrustedCertificates = driverConfig.AutoAcceptCertificate,
                     RejectSHA1SignedCertificates = false
                 },
                 TransportConfigurations = new TransportConfigurationCollection(),
-                TransportQuotas = new TransportQuotas { OperationTimeout = _config.Timeout },
-                ClientConfiguration = new ClientConfiguration { DefaultSessionTimeout = _config.SessionTimeout },
+                TransportQuotas = new TransportQuotas { OperationTimeout = driverConfig.Timeout },
+                ClientConfiguration = new ClientConfiguration { DefaultSessionTimeout = driverConfig.SessionTimeout },
                 TraceConfiguration = new TraceConfiguration()
             };
 

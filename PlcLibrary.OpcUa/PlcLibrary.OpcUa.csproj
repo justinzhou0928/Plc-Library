@@ -11,4 +11,8 @@
     <ProjectReference Include="..\PlcLibrary\PlcLibrary.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="PlcLibrary.Tests" />
+  </ItemGroup>
+
 </Project>
