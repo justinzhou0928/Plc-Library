@@ -45,4 +45,17 @@ public class ModbusDriverConfigTests
         Assert.Equal("10.0.0.1", config.Host);
         Assert.Equal(5, config.SlaveId);
     }
+
+    [Fact]
+    public void ByteOrder_DefaultIsEmpty()
+    {
+        Assert.Equal(string.Empty, new ModbusDriverConfig().ByteOrder);
+    }
+
+    [Fact]
+    public void Parse_ByteOrder_IsBound()
+    {
+        var config = ModbusDriverConfig.Parse("host:10.0.0.1;byteorder:CDAB");
+        Assert.Equal("CDAB", config.ByteOrder);
+    }
 }

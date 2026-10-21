@@ -18,6 +18,7 @@ namespace PlcLibrary.Modbus
         private readonly ILogger _logger;
         private readonly byte _slaveId;
         private readonly Func<IModbusMaster> _masterFactory;
+        private readonly string _defaultByteOrder;
         private readonly object _stateLock = new();
         private IModbusMaster? _master;
         private DriverStatus _status = DriverStatus.Disconnected;
@@ -27,6 +28,9 @@ namespace PlcLibrary.Modbus
             _logger = logger;
             _slaveId = config.SlaveId;
             _masterFactory = masterFactory;
+            _defaultByteOrder = config.ByteOrder;
+            if (!ModbusValueCodec.IsValidByteOrderText(_defaultByteOrder))
+                throw new ArgumentException($"Invalid Modbus ByteOrder '{_defaultByteOrder}'", nameof(config));
         }
 
         public DriverStatus DriverStatus
@@ -110,15 +114,16 @@ namespace PlcLibrary.Modbus
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    await ReadBatchAsync(master, points, group, results, ct).ConfigureAwait(false);
+                    await ReadBatchAsync(master, points, group, results).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
                     ModbusLog.LogReadFailed(_logger, ex, group.Start.ToString());
                     MarkFaultedIfTransport(ex);
-                    foreach (var idx in group.Indices)
-                        results[idx] = DriverResult.Bad(points[idx].Address, QualityCode.BadCommFailure, ex.Message);
+                    foreach (var point in group.Points)
+                        results[point.Index] = DriverResult.Bad(points[point.Index].Address,
+                            QualityCode.BadCommFailure, ex.Message);
                 }
             }
 
@@ -133,23 +138,73 @@ namespace PlcLibrary.Modbus
             var master = GetMasterOrThrow();
             var entryList = values.ToList();
             var results = new DriverResult[entryList.Count];
+            var encoded = new ushort[entryList.Count][];
+            var plans = new List<PointInfo>();
 
-            var groups = BuildWriteGroups(entryList, results);
+            for (var i = 0; i < entryList.Count; i++)
+            {
+                var point = entryList[i].Key;
+                if (!TryParseAddress(point.Address, out var type, out var offset))
+                {
+                    results[i] = DriverResult.Bad(point.Address, QualityCode.BadConfigError,
+                        $"Invalid Modbus address: {point.Address}");
+                    continue;
+                }
+
+                if (type is not ModbusType.Coil and not ModbusType.HoldingRegister)
+                {
+                    results[i] = DriverResult.Bad(point.Address, QualityCode.BadConfigError,
+                        $"Write not supported for {type}");
+                    continue;
+                }
+
+                if (!TryCreatePointInfo(point, type, offset, i, out var info, out var error))
+                {
+                    results[i] = DriverResult.Bad(point.Address, QualityCode.BadConfigError,
+                        error ?? "Invalid Modbus point configuration");
+                    continue;
+                }
+
+                var limit = WriteLimit(type);
+                if (info.WordCount > limit)
+                {
+                    results[i] = DriverResult.Bad(point.Address, QualityCode.BadConfigError,
+                        $"Point '{point.Address}' span {info.WordCount} exceeds write limit {limit} registers");
+                    continue;
+                }
+
+                var buffer = new ushort[info.WordCount];
+                if (!ModbusValueCodec.TryEncode(entryList[i].Value, info.Kind, info.StringLength,
+                        info.ByteOrder, buffer, out error))
+                {
+                    results[i] = DriverResult.Bad(point.Address, QualityCode.BadConfigError,
+                        error ?? "Value cannot be encoded for Modbus");
+                    continue;
+                }
+
+                encoded[i] = buffer;
+                plans.Add(info);
+            }
+
+            var groups = BuildWriteGroups(plans, entryList, results);
 
             foreach (var group in groups)
             {
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    await WriteBatchAsync(master, group, entryList, results, ct).ConfigureAwait(false);
+                    await WriteBatchAsync(master, group, encoded).ConfigureAwait(false);
+                    foreach (var point in group.Points)
+                        results[point.Index] = DriverResult.Good(entryList[point.Index].Key.Address, null);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
                     ModbusLog.LogWriteFailed(_logger, ex, group.Start.ToString());
                     MarkFaultedIfTransport(ex);
-                    foreach (var idx in group.Indices)
-                        results[idx] = DriverResult.Bad(entryList[idx].Key.Address, QualityCode.BadCommFailure, ex.Message);
+                    foreach (var point in group.Points)
+                        results[point.Index] = DriverResult.Bad(entryList[point.Index].Key.Address,
+                            QualityCode.BadCommFailure, ex.Message);
                 }
             }
 
@@ -162,12 +217,10 @@ namespace PlcLibrary.Modbus
             ModbusLog.LogDriverDisposed(_logger);
         }
 
-        // ─── batch infrastructure ───
-
-        private const int MaxReadBitsPerRequest = 2000;      // NModbus: 一次读线圈/离散输入上限
-        private const int MaxReadRegistersPerRequest = 125;  // NModbus: 一次读寄存器上限
-        private const int MaxWriteCoilsPerRequest = 1968;    // Modbus 写多线圈 PDU 上限 (0x7B0)
-        private const int MaxWriteRegistersPerRequest = 123; // Modbus 写多寄存器 PDU 上限 (0x7B)
+        private const int MaxReadBitsPerRequest = 2000;
+        private const int MaxReadRegistersPerRequest = 125;
+        private const int MaxWriteCoilsPerRequest = 1968;
+        private const int MaxWriteRegistersPerRequest = 123;
 
         private static int ReadLimit(ModbusType type)
             => type is ModbusType.Coil or ModbusType.DiscreteInput
@@ -176,14 +229,22 @@ namespace PlcLibrary.Modbus
         private static int WriteLimit(ModbusType type)
             => type == ModbusType.Coil ? MaxWriteCoilsPerRequest : MaxWriteRegistersPerRequest;
 
-        private readonly record struct PointInfo(int Index, ushort Offset);
+        private readonly record struct PointInfo(
+            int Index,
+            ModbusType Type,
+            ushort Offset,
+            int WordCount,
+            ModbusValueKind Kind,
+            int StringLength,
+            ByteOrderMap ByteOrder);
 
         private sealed class BatchGroup
         {
             public ModbusType Type;
             public ushort Start;
-            public ushort Count;
-            public List<int> Indices = [];
+            public int End;
+            public int Count => End - Start;
+            public List<PointInfo> Points = [];
         }
 
         private List<BatchGroup> BuildBatchGroups(TagPointConfiguration[] points, DriverResult[] results)
@@ -194,41 +255,226 @@ namespace PlcLibrary.Modbus
             {
                 if (!TryParseAddress(points[i].Address, out var type, out var offset))
                 {
-                    results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadConfigError, $"Invalid Modbus address: {points[i].Address}");
+                    results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadConfigError,
+                        $"Invalid Modbus address: {points[i].Address}");
+                    continue;
+                }
+
+                if (!TryCreatePointInfo(points[i], type, offset, i, out var info, out var error))
+                {
+                    results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadConfigError,
+                        error ?? "Invalid Modbus point configuration");
+                    continue;
+                }
+
+                var limit = ReadLimit(type);
+                if (info.WordCount > limit)
+                {
+                    results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadConfigError,
+                        $"Point '{points[i].Address}' span {info.WordCount} exceeds read limit {limit} registers");
                     continue;
                 }
 
                 if (!byType.TryGetValue(type, out var list))
                     byType[type] = list = [];
 
-                list.Add(new PointInfo(i, offset));
+                list.Add(info);
+            }
+
+            var groups = new List<BatchGroup>();
+            foreach (var kv in byType)
+                groups.AddRange(MergeGroups(kv.Key, kv.Value, ReadLimit(kv.Key)));
+
+            return groups;
+        }
+
+        private bool TryCreatePointInfo(TagPointConfiguration point, ModbusType type, ushort offset, int index,
+            out PointInfo info, out string? error)
+        {
+            info = default;
+            error = null;
+
+            if (type is ModbusType.Coil or ModbusType.DiscreteInput)
+            {
+                if (point.Length != 0)
+                {
+                    error = $"Length is only supported for register string points (address {point.Address})";
+                    return false;
+                }
+
+                ModbusValueKind kind;
+                if (string.IsNullOrWhiteSpace(point.DataType))
+                {
+                    kind = ModbusValueKind.Boolean;
+                }
+                else if (!ModbusValueCodec.TryGetKind(point.DataType, out kind, out error))
+                {
+                    return false;
+                }
+
+                if (kind != ModbusValueKind.Boolean)
+                {
+                    error = $"Bit address '{point.Address}' supports only bool DataType";
+                    return false;
+                }
+
+                info = new PointInfo(index, type, offset, 1, kind, 0, default);
+                return true;
+            }
+
+            if (!ModbusValueCodec.TryGetKind(point.DataType, out var valueKind, out error))
+                return false;
+
+            int wordCount;
+            var stringLength = 0;
+            ByteOrderMap byteOrder;
+
+            if (valueKind == ModbusValueKind.String)
+            {
+                if (point.Length <= 0)
+                {
+                    error = $"DataType 'string' requires Length > 0 (address {point.Address})";
+                    return false;
+                }
+
+                if (!ModbusValueCodec.TryGetWordCount(valueKind, point.Length, out wordCount, out error))
+                    return false;
+
+                if (!TryResolveByteOrder(point.ByteOrder, 2, out byteOrder, out error))
+                    return false;
+
+                stringLength = point.Length;
+            }
+            else
+            {
+                if (point.Length != 0)
+                {
+                    error = $"Length is only supported for DataType 'string' (address {point.Address})";
+                    return false;
+                }
+
+                if (!ModbusValueCodec.TryGetWordCount(valueKind, 0, out wordCount, out error))
+                    return false;
+
+                if (!TryResolveByteOrder(point.ByteOrder, ModbusValueCodec.GetByteWidth(valueKind),
+                        out byteOrder, out error))
+                    return false;
+            }
+
+            if (offset + wordCount > 65536)
+            {
+                error = $"Point '{point.Address}' spans beyond the Modbus address space (65536)";
+                return false;
+            }
+
+            info = new PointInfo(index, type, offset, wordCount, valueKind, stringLength, byteOrder);
+            return true;
+        }
+
+        private bool TryResolveByteOrder(string? pointOrder, int width, out ByteOrderMap byteOrder,
+            out string? error)
+        {
+            error = null;
+            if (!string.IsNullOrWhiteSpace(pointOrder))
+                return ModbusValueCodec.TryParseByteOrder(pointOrder, width, out byteOrder, out error);
+
+            if (!string.IsNullOrWhiteSpace(_defaultByteOrder)
+                && ModbusValueCodec.TryParseByteOrder(_defaultByteOrder, width, out byteOrder, out _))
+            {
+                return true;
+            }
+
+            byteOrder = ByteOrderMap.Identity(width);
+            return true;
+        }
+
+        private List<BatchGroup> BuildWriteGroups(List<PointInfo> plans,
+            List<KeyValuePair<TagPointConfiguration, object>> entryList, DriverResult[] results)
+        {
+            var byType = new Dictionary<ModbusType, List<PointInfo>>();
+            foreach (var plan in plans)
+            {
+                if (!byType.TryGetValue(plan.Type, out var list))
+                    byType[plan.Type] = list = [];
+                list.Add(plan);
             }
 
             var groups = new List<BatchGroup>();
             foreach (var kv in byType)
             {
                 kv.Value.Sort((a, b) => a.Offset.CompareTo(b.Offset));
-                var limit = ReadLimit(kv.Key);
-                BatchGroup? current = null;
+                var valid = RemoveOverlappingWrites(kv.Value, entryList, results);
+                groups.AddRange(MergeGroups(kv.Key, valid, WriteLimit(kv.Key)));
+            }
 
-                foreach (var pi in kv.Value)
+            return groups;
+        }
+
+        private static List<PointInfo> RemoveOverlappingWrites(List<PointInfo> sorted,
+            List<KeyValuePair<TagPointConfiguration, object>> entryList, DriverResult[] results)
+        {
+            // 同一寄存器被两个写点位覆盖时值语义不明，整簇拒绝而不是静默覆盖。
+            var valid = new List<PointInfo>(sorted.Count);
+            var i = 0;
+
+            while (i < sorted.Count)
+            {
+                var j = i + 1;
+                var maxEnd = sorted[i].Offset + sorted[i].WordCount;
+                while (j < sorted.Count && sorted[j].Offset < maxEnd)
                 {
-                    if (current is null || pi.Offset != current.Start + current.Count || current.Count >= limit)
+                    var end = sorted[j].Offset + sorted[j].WordCount;
+                    if (end > maxEnd)
+                        maxEnd = end;
+                    j++;
+                }
+
+                if (j - i == 1)
+                {
+                    valid.Add(sorted[i]);
+                }
+                else
+                {
+                    for (var k = i; k < j; k++)
                     {
-                        current = new BatchGroup
-                        {
-                            Type = kv.Key,
-                            Start = pi.Offset,
-                            Count = 1,
-                            Indices = [pi.Index]
-                        };
-                        groups.Add(current);
+                        var address = entryList[sorted[k].Index].Key.Address;
+                        results[sorted[k].Index] = DriverResult.Bad(address, QualityCode.BadConfigError,
+                            $"Overlapping write points are not supported (address {address})");
                     }
-                    else
+                }
+
+                i = j;
+            }
+
+            return valid;
+        }
+
+        private static List<BatchGroup> MergeGroups(ModbusType type, List<PointInfo> points, int limit)
+        {
+            // 按区间合并：相邻/重叠点位共用一次读取；超过 PDU 上限时断开。
+            points.Sort((a, b) => a.Offset.CompareTo(b.Offset));
+            var groups = new List<BatchGroup>();
+            BatchGroup? current = null;
+
+            foreach (var point in points)
+            {
+                var end = point.Offset + point.WordCount;
+                if (current is null || point.Offset > current.End || end - current.Start > limit)
+                {
+                    current = new BatchGroup
                     {
-                        current.Count++;
-                        current.Indices.Add(pi.Index);
-                    }
+                        Type = type,
+                        Start = point.Offset,
+                        End = end,
+                        Points = [point],
+                    };
+                    groups.Add(current);
+                }
+                else
+                {
+                    if (end > current.End)
+                        current.End = end;
+                    current.Points.Add(point);
                 }
             }
 
@@ -236,122 +482,93 @@ namespace PlcLibrary.Modbus
         }
 
         private async Task ReadBatchAsync(IModbusMaster master, TagPointConfiguration[] points,
-            BatchGroup group, DriverResult[] results, CancellationToken ct)
+            BatchGroup group, DriverResult[] results)
         {
             switch (group.Type)
             {
                 case ModbusType.Coil:
-                    var coils = await master.ReadCoilsAsync(_slaveId, group.Start, group.Count).ConfigureAwait(false);
-                    for (var i = 0; i < group.Indices.Count; i++)
-                        results[group.Indices[i]] = DriverResult.Good(points[group.Indices[i]].Address, coils[i]);
+                {
+                    var coils = await master.ReadCoilsAsync(_slaveId, group.Start, (ushort)group.Count)
+                        .ConfigureAwait(false);
+                    AssignBitResults(points, group, coils, results);
                     break;
+                }
 
                 case ModbusType.DiscreteInput:
-                    var inputs = await master.ReadInputsAsync(_slaveId, group.Start, group.Count).ConfigureAwait(false);
-                    for (var i = 0; i < group.Indices.Count; i++)
-                        results[group.Indices[i]] = DriverResult.Good(points[group.Indices[i]].Address, inputs[i]);
+                {
+                    var inputs = await master.ReadInputsAsync(_slaveId, group.Start, (ushort)group.Count)
+                        .ConfigureAwait(false);
+                    AssignBitResults(points, group, inputs, results);
                     break;
+                }
 
                 case ModbusType.InputRegister:
-                    var iRegs = await master.ReadInputRegistersAsync(_slaveId, group.Start, group.Count).ConfigureAwait(false);
-                    for (var i = 0; i < group.Indices.Count; i++)
-                        results[group.Indices[i]] = DriverResult.Good(points[group.Indices[i]].Address, iRegs[i]);
+                {
+                    var registers = await master.ReadInputRegistersAsync(_slaveId, group.Start, (ushort)group.Count)
+                        .ConfigureAwait(false);
+                    AssignRegisterResults(points, group, registers, results);
                     break;
+                }
 
                 case ModbusType.HoldingRegister:
-                    var hRegs = await master.ReadHoldingRegistersAsync(_slaveId, group.Start, group.Count).ConfigureAwait(false);
-                    for (var i = 0; i < group.Indices.Count; i++)
-                        results[group.Indices[i]] = DriverResult.Good(points[group.Indices[i]].Address, hRegs[i]);
+                {
+                    var registers = await master.ReadHoldingRegistersAsync(_slaveId, group.Start, (ushort)group.Count)
+                        .ConfigureAwait(false);
+                    AssignRegisterResults(points, group, registers, results);
                     break;
+                }
             }
         }
 
-        private List<BatchGroup> BuildWriteGroups(
-            List<KeyValuePair<TagPointConfiguration, object>> entryList, DriverResult[] results)
+        private static void AssignBitResults(TagPointConfiguration[] points, BatchGroup group,
+            bool[] values, DriverResult[] results)
         {
-            var byType = new Dictionary<ModbusType, List<PointInfo>>();
+            if (values.Length < group.Count)
+                throw new InvalidOperationException(
+                    $"Modbus returned {values.Length} bits, expected {group.Count}");
 
-            for (var i = 0; i < entryList.Count; i++)
+            foreach (var point in group.Points)
             {
-                if (!TryParseAddress(entryList[i].Key.Address, out var type, out var offset))
-                {
-                    results[i] = DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadConfigError,
-                        $"Invalid Modbus address: {entryList[i].Key.Address}");
-                    continue;
-                }
-
-                if (type is not ModbusType.Coil and not ModbusType.HoldingRegister)
-                {
-                    results[i] = DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadConfigError,
-                        $"Write not supported for {type}");
-                    continue;
-                }
-
-                if (!byType.TryGetValue(type, out var list))
-                    byType[type] = list = [];
-
-                list.Add(new PointInfo(i, offset));
+                results[point.Index] = DriverResult.Good(points[point.Index].Address,
+                    values[point.Offset - group.Start]);
             }
-
-            var groups = new List<BatchGroup>();
-            foreach (var kv in byType)
-            {
-                kv.Value.Sort((a, b) => a.Offset.CompareTo(b.Offset));
-                var limit = WriteLimit(kv.Key);
-                BatchGroup? current = null;
-
-                foreach (var pi in kv.Value)
-                {
-                    if (current is null || pi.Offset != current.Start + current.Count || current.Count >= limit)
-                    {
-                        current = new BatchGroup
-                        {
-                            Type = kv.Key,
-                            Start = pi.Offset,
-                            Count = 1,
-                            Indices = [pi.Index]
-                        };
-                        groups.Add(current);
-                    }
-                    else
-                    {
-                        current.Count++;
-                        current.Indices.Add(pi.Index);
-                    }
-                }
-            }
-
-            return groups;
         }
 
-        private async Task WriteBatchAsync(IModbusMaster master, BatchGroup group,
-            List<KeyValuePair<TagPointConfiguration, object>> entryList, DriverResult[] results, CancellationToken ct)
+        private static void AssignRegisterResults(TagPointConfiguration[] points, BatchGroup group,
+            ushort[] registers, DriverResult[] results)
+        {
+            if (registers.Length < group.Count)
+                throw new InvalidOperationException(
+                    $"Modbus returned {registers.Length} registers, expected {group.Count}");
+
+            foreach (var point in group.Points)
+            {
+                var value = ModbusValueCodec.Decode(
+                    registers.AsSpan(point.Offset - group.Start, point.WordCount),
+                    point.Kind, point.StringLength, point.ByteOrder);
+                results[point.Index] = DriverResult.Good(points[point.Index].Address, value);
+            }
+        }
+
+        private async Task WriteBatchAsync(IModbusMaster master, BatchGroup group, ushort[][] encoded)
         {
             if (group.Type == ModbusType.Coil)
             {
                 var values = new bool[group.Count];
-                for (var i = 0; i < group.Indices.Count; i++)
-                    values[i] = Convert.ToBoolean(entryList[group.Indices[i]].Value);
+                foreach (var point in group.Points)
+                    values[point.Offset - group.Start] = encoded[point.Index][0] != 0;
 
                 await master.WriteMultipleCoilsAsync(_slaveId, group.Start, values).ConfigureAwait(false);
             }
             else
             {
                 var values = new ushort[group.Count];
-                for (var i = 0; i < group.Indices.Count; i++)
-                {
-                    // unchecked：负数按二进制补码写入（-1 -> 0xFFFF），避免 Convert.ToUInt16 抛 OverflowException
-                    values[i] = unchecked((ushort)Convert.ToInt64(entryList[group.Indices[i]].Value));
-                }
+                foreach (var point in group.Points)
+                    encoded[point.Index].CopyTo(values, point.Offset - group.Start);
 
                 await master.WriteMultipleRegistersAsync(_slaveId, group.Start, values).ConfigureAwait(false);
             }
-
-            foreach (var idx in group.Indices)
-                results[idx] = DriverResult.Good(entryList[idx].Key.Address, null);
         }
-
-        // ─── helpers ───
 
         private IModbusMaster GetMasterOrThrow()
         {

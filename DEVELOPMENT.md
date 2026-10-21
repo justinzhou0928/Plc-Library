@@ -252,7 +252,11 @@ var type = DataTypeMapper.Resolve(points[i].DataType);
 // 未指定 DataType 时默认返回 typeof(int)
 ```
 
-支持的类型简写：`bool`/`short`/`ushort`/`int`/`uint`/`long`/`ulong`/`float`/`double`/`string` 以及对应的 `System.Xxx` 完整名称。
+严格解析用 `DataTypeMapper.TryResolve`（未知名称返回 `false`），避免拼写错误静默回退到 `int`。
+
+支持的类型简写：`bool`/`short`/`ushort`/`int`/`uint`/`long`/`ulong`/`float`/`double`/`string` 以及对应的 `System.Xxx` 完整名称；另支持 IEC 别名 `int16`/`uint16`/`int32`/`uint32`/`int64`/`uint64`/`real`/`lreal`/`sint`/`usint`/`dint`/`udint`/`lint`/`ulint`/`word`/`dword`/`lword`。
+
+Modbus 的多寄存器编解码集中在 `PlcLibrary.Modbus.ModbusValueCodec`（internal，测试通过 `InternalsVisibleTo` 访问）：`DataType + Length + ByteOrder` → WordCount/CLR 值，读写共用，避免各驱动重复实现字节序。
 
 ### 2. 实现 IProtocolDriver
 
@@ -552,6 +556,7 @@ dotnet test PlcLibrary.Tests/PlcLibrary.Tests.csproj -c Debug --filter "FullyQua
 | `PlcLibrary.Tests/OpcUa/OpcUaDriverConfigurationTests.cs` | OPC UA 客户端证书存储配置离线校验（`ValidateAsync(ApplicationType.Client)`），无需真实服务端 |
 | `PlcLibrary.Tests/OpcUa/OpcUaDriverSubscriptionTests.cs` | OPC UA `Subscription`/`MonitoredItem` 构造重载回归（采样间隔、队列长度、`DiscardOldest`），无需真实服务端 |
 | `PlcLibrary.Tests/Drivers/DriverConfigConsumptionTests.cs` | 配置-消费闭环：每个 `*DriverConfig` 公共属性都被驱动源码引用 |
+| `PlcLibrary.Tests/Modbus/ModbusValueCodecTests.cs` | Modbus 16/32/64 位字节序、字符串 AB/BA/奇数长度/NUL 截断、编解码往返；配合 `ModbusBatchReadTests`/`ModbusBatchWriteTests` 覆盖多寄存器点位 |
 
 其余既有测试覆盖：驱动配置/批量读写、连接池弹性与回收、管道分发与背压、调度 reconcile、协议地址解析等（`dotnet test` 全量执行）。
 

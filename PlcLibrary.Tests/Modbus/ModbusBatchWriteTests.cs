@@ -138,6 +138,107 @@ public class ModbusBatchWriteTests
         _master.Verify(m => m.WriteMultipleRegistersAsync(1, (ushort)0, It.IsAny<ushort[]>()), Times.Once);
     }
 
+    [Fact]
+    public async Task FloatPoint_WritesTwoRegisters()
+    {
+        var driver = Connect();
+        var values = new Dictionary<TagPointConfiguration, object>
+        {
+            [new() { TagId = "temp", Address = "42263", DataType = "float", ByteOrder = "CDAB" }] = 20.0f,
+        };
+
+        var results = await driver.WriteAsync(values);
+
+        _master.Verify(m => m.WriteMultipleRegistersAsync(1, (ushort)2262,
+            It.Is<ushort[]>(a => a.Length == 2 && a[0] == 0x0000 && a[1] == 0x41A0)), Times.Once);
+        Assert.Equal(QualityCode.Good, results[0].Status);
+    }
+
+    [Fact]
+    public async Task StringPoint_WritesPaddedRegisters()
+    {
+        var driver = Connect();
+        var values = new Dictionary<TagPointConfiguration, object>
+        {
+            [new() { TagId = "s", Address = "42251", DataType = "string", Length = 8 }] = "ABC",
+        };
+
+        var results = await driver.WriteAsync(values);
+
+        _master.Verify(m => m.WriteMultipleRegistersAsync(1, (ushort)2250,
+            It.Is<ushort[]>(a => a.Length == 4
+                && a[0] == 0x4142 && a[1] == 0x4300 && a[2] == 0x0000 && a[3] == 0x0000)), Times.Once);
+        Assert.Equal(QualityCode.Good, results[0].Status);
+    }
+
+    [Fact]
+    public async Task StringAndAdjacentFloat_SingleWriteRequest()
+    {
+        var driver = Connect();
+        var values = new Dictionary<TagPointConfiguration, object>
+        {
+            [new() { TagId = "s", Address = "42251", DataType = "string", Length = 4 }] = "ABCD",
+            [new() { TagId = "f", Address = "42253", DataType = "float" }] = 20.0f,
+        };
+
+        var results = await driver.WriteAsync(values);
+
+        _master.Verify(m => m.WriteMultipleRegistersAsync(1, (ushort)2250,
+            It.Is<ushort[]>(a => a.Length == 4
+                && a[0] == 0x4142 && a[1] == 0x4344
+                && a[2] == 0x41A0 && a[3] == 0x0000)), Times.Once);
+        Assert.All(results, r => Assert.Equal(QualityCode.Good, r.Status));
+    }
+
+    [Fact]
+    public async Task OverlappingWritePoints_ReturnBadConfigError()
+    {
+        var driver = Connect();
+        var values = new Dictionary<TagPointConfiguration, object>
+        {
+            [new() { TagId = "s", Address = "42251", DataType = "string", Length = 24 }]
+                = "ABCDEFGHIJKLMNOPQRSTUVWX",
+            [new() { TagId = "raw", Address = "42255" }] = (ushort)1,
+        };
+
+        var results = await driver.WriteAsync(values);
+
+        Assert.All(results, r => Assert.Equal(QualityCode.BadConfigError, r.Status));
+        Assert.All(results, r => Assert.Contains("Overlapping", r.ErrorMessage));
+        _master.Verify(m => m.WriteMultipleRegistersAsync(It.IsAny<byte>(), It.IsAny<ushort>(),
+            It.IsAny<ushort[]>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task StringValueTooLong_ReturnsBadConfigError()
+    {
+        var driver = Connect();
+        var values = new Dictionary<TagPointConfiguration, object>
+        {
+            [new() { TagId = "s", Address = "42251", DataType = "string", Length = 4 }] = "ABCDE",
+        };
+
+        var results = await driver.WriteAsync(values);
+
+        Assert.Equal(QualityCode.BadConfigError, results[0].Status);
+        Assert.Contains("exceeds", results[0].ErrorMessage);
+    }
+
+    [Fact]
+    public async Task NonAsciiStringValue_ReturnsBadConfigError()
+    {
+        var driver = Connect();
+        var values = new Dictionary<TagPointConfiguration, object>
+        {
+            [new() { TagId = "s", Address = "42251", DataType = "string", Length = 4 }] = "中文",
+        };
+
+        var results = await driver.WriteAsync(values);
+
+        Assert.Equal(QualityCode.BadConfigError, results[0].Status);
+        Assert.Contains("ASCII", results[0].ErrorMessage);
+    }
+
     private sealed class TestDriver : ModbusDriverBase
     {
         public TestDriver(ILogger logger, ModbusDriverConfig config, Func<IModbusMaster> factory)

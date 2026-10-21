@@ -2,6 +2,24 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 新增
+
+- **Modbus 多寄存器类型解码/编码**：`TagPointConfiguration` 新增 `Length`、`ByteOrder`，`ModbusDriverBase` 按 `DataType` 计算 WordCount（short/ushort/bool=1，int/uint/float=2，long/ulong/double=4，string=ceil(Length/2)），一个点位只产出一条 `DriverResult`（`string`/`float`/`int`/...）。读写共用 `ModbusValueCodec`，支持 16/32/64 位及任意合法字节排列（AB/BA/ABCD/CDAB/BADC/DCBA/ABCDEFGH/GHEFCDAB...）；字符串支持 AB/BA、奇数长度、首个 `\0` 截断
+- **Modbus 批量分组按区间合并**：相邻、重叠、包含的多寄存器点位合并为单次请求（如 42251 的 24 字符条码 + 42263 的 float 合并为 14 个寄存器），仍按读 125 / 写 123 寄存器上限切分；写路径检测重叠点位并返回 `BadConfigError`
+- `ModbusDriverConfig.ByteOrder` 设备级默认字节序（连接串 `byteorder:CDAB;`），点位级覆盖；位宽不匹配时回退自然序
+- `DataTypeMapper.TryResolve` 严格类型解析与 IEC 别名（`int16`/`int32`/`real`/`lreal`/`dint`/`udint`/`word`/`dword` 等）；`Resolve` 保持原有回退语义
+
+### 变更
+
+- **Modbus 开始消费 `DataType`**：此前被忽略的 `DataType` 配置升级后将生效。`DataType = "float"` 从返回 `ushort` 变为 `float` 并占用 2 个寄存器；`DataType = "int"` 占用 2 个寄存器；`DataType = "string"` 必须配置 `Length`，否则返回 `BadConfigError`。不写 `DataType` 的点位行为不变（逐寄存器 `ushort`）
+- Modbus 字符串按 ASCII 解码/编码；非 ASCII 写入返回 `BadConfigError`（后续可扩展编码配置）
+
+### 测试
+
+- 342 个测试用例（239 → +103）：`ModbusValueCodec` 的 16/32/64 位字节序、字符串 AB/BA/奇数长度/NUL 截断、编解码往返；批量读的条码单请求、相邻 string+float 合并、重叠 float+ushort、设备级字节序、无效配置；批量写的 float/string 编码、相邻多寄存器合并、重叠写拒绝、超长/非 ASCII；`DataTypeMapper` 别名与严格解析；`ModbusDriverConfig.ByteOrder` 绑定
+
 ## [1.1.1] - 2026-10-20
 
 ### 修复

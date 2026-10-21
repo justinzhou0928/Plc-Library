@@ -176,6 +176,7 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 | port | 502 | 端口 |
 | slaveid | 1 | 从站 ID |
 | timeout | 3000 | 超时 (ms) |
+| byteorder | - | 设备级默认字节序（AB/BA/ABCD/CDAB/...），点位级可覆盖 |
 
 示例：`host:10.0.0.1;port:502;slaveid:2`
 
@@ -188,7 +189,46 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 | `3xxxx` | Input Register | 只读 | `30001` | 输入寄存器，16 位无符号整数 |
 | `4xxxx` | Holding Register | 读写 | `40042` | 保持寄存器，16 位无符号整数 |
 
-地址为 **1-based**（PLC 习惯），驱动内部自动转换为 0-based 偏移。连续地址自动合并为单次批量读写，并按 Modbus PDU 上限自动切分（读寄存器 ≤125、线圈/离散输入 ≤2000；写寄存器 ≤123、线圈 ≤1968）。
+地址为 **1-based**（PLC 习惯），驱动内部自动转换为 0-based 偏移。连续/相邻地址自动合并为单次批量读写，并按 Modbus PDU 上限自动切分（读寄存器 ≤125、线圈/离散输入 ≤2000；写寄存器 ≤123、线圈 ≤1968）；读路径允许重叠点位从同一缓冲区解码，写路径遇到重叠点位返回 `BadConfigError`。
+
+**Modbus 多寄存器数据（string / 32 位 / 64 位）**
+
+`DataType` 配合 `Length`、`ByteOrder` 可让驱动一次读出整条字符串或多个寄存器组成的数值：
+
+```csharp
+new TagPointConfiguration
+{
+    TagId = "barcode",
+    Address = "42251",      // 12 个保持寄存器
+    DataType = "string",
+    Length = 24,            // 字节数（ASCII 下等于字符数）；寄存器数 = ceil(24 / 2) = 12
+    ByteOrder = "AB",       // 默认 AB（寄存器高字节在前）
+}
+
+new TagPointConfiguration
+{
+    TagId = "temp",
+    Address = "42263",      // 紧邻条码的 2 个寄存器
+    DataType = "float",
+    ByteOrder = "CDAB",     // 字交换；42251~42264 会合并成一次请求
+}
+```
+
+- 每个点位只产出一条 `DriverResult`，`Value` 为解析后的 `string`/`float`/`int`/...；
+- 不写 `DataType` 时保持原有行为：每个寄存器一条 `ushort`；
+- `string` 必须配置 `Length`；`Length` 是**字节数**（ASCII 下等于字符数），不是寄存器数；首个 `\0` 截断；
+- 单次请求寄存器上限：读 125、写 123；因此字符串读最多 250 字节、写最多 246 字节，超长返回 `BadConfigError`，不会静默截断；
+- `ByteOrder` 为空时使用连接串的 `byteorder`，仍为空则 `AB`；点位级优先；
+- 支持 `bool`/`short`/`ushort`/`int`/`uint`/`long`/`ulong`/`float`/`double`/`string`，以及 `int32`/`real`/`dint` 等别名。
+
+**ByteOrder 取值**
+
+| 类型宽度 | 常用值 | 说明 |
+|---|---|---|
+| 16 位 | `AB`（默认）/ `BA` | `AB` 高字节在前；`BA` 字节交换 |
+| 32 位 | `ABCD` / `CDAB` / `BADC` / `DCBA` | 大端 / 字交换 / 字节交换 / 全反 |
+| 64 位 | `ABCDEFGH` / `GHEFCDAB` / `BADCFEHG` / `HGFEDCBA` | 8 字节排列，支持任意合法排列 |
+| 字符串 | `AB`（默认）/ `BA` | 每寄存器内高/低字节顺序 |
 
 **Modbus RTU / ASCII**（串口）
 
@@ -201,6 +241,7 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 | stopbits | One | 停止位（One/OnePointFive/Two） |
 | timeout | 3000 | 超时 (ms) |
 | slaveid | 1 | 从站 ID |
+| byteorder | - | 设备级默认字节序（同 Modbus TCP） |
 
 示例：`host:COM3;baudrate:19200;parity:Even;stopbits:One;slaveid:1`
 
@@ -399,7 +440,7 @@ ControlLogix 示例：`host:192.168.1.96;path:1,0`
 | 驱动 | DataType 是否必需 | 未指定时的默认值 | 说明 |
 |------|:--:|------|------|
 | S7 | 否（string 除外） | 地址推断 | 标量由地址推断（`DBX`=bool, `DBW`=word）；**字符串需地址带长度**（`DB6000.DBB504.100` 读 S7 STRING(100)） |
-| Modbus | 否 | 地址前缀推断 | `0xxxx`=bool, `4xxxx`=ushort |
+| Modbus | 否 | 地址前缀推断 | `0xxxx`=bool, `4xxxx`=ushort；配置 `DataType` 后解码为 string/float/int 等多寄存器值（见 Modbus 章节） |
 | OPC UA | 否 | 服务端返回 | 服务端告知类型，值透传 |
 | BACnet | 否 | 服务端返回 | `PROP_PRESENT_VALUE` 返回原始值 |
 | AllenBradley | **推荐** | `int` | 用于确定 `ReadAsync<T>` 的泛型类型 |
@@ -421,6 +462,8 @@ ControlLogix 示例：`host:192.168.1.96;path:1,0`
 | `double` | `System.Double` | `double` |
 | `string` | `System.String` | `string` |
 
+另支持 IEC 别名：`int16`/`uint16`/`int32`/`uint32`/`int64`/`uint64`/`real`/`lreal`/`dint`/`udint`/`lint`/`ulint`/`word`/`dword`/`lword`。
+
 ```csharp
 // Omron D100 为 32 位浮点数
 new TagPointConfiguration { TagId = "temp", Address = "D100", DataType = "float" }
@@ -428,6 +471,8 @@ new TagPointConfiguration { TagId = "temp", Address = "D100", DataType = "float"
 // AllenBradley tag 为布尔量
 new TagPointConfiguration { TagId = "run", Address = "MotorRun", DataType = "bool" }
 ```
+
+> `Length` 仅对 `DataType = "string"` 有效（字节数）；`ByteOrder` 目前主要由 Modbus 驱动消费，其它驱动可忽略。
 
 ### 驱动池
 

@@ -13,6 +13,9 @@ namespace PlcLibrary.Modbus
         public int Timeout { get; init; } = 3000;
         public byte SlaveId { get; init; } = 1;
 
+        /// <summary>设备级默认字节序（AB/BA/ABCD/CDAB/...）；点位未指定时使用，空表示 AB（大端）。</summary>
+        public string ByteOrder { get; init; } = string.Empty;
+
         public static ModbusDriverConfig Parse(string cs)
             => ConnectionStringBinder.Bind<ModbusDriverConfig>(cs);
     }
