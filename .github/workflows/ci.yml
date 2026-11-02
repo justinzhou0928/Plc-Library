@@ -19,7 +19,37 @@ jobs:
 
     - run: dotnet restore
     - run: dotnet build --configuration Release --no-restore
-    - run: dotnet test --configuration Release --no-build --verbosity normal
+    - name: Run tests
+      run: >
+        dotnet test --configuration Release --no-build --verbosity normal
+        --results-directory ./TestResults
+        --logger "trx;LogFileName=test-results.trx"
+
+    - name: Report failed tests
+      if: failure()
+      run: |
+        python3 - <<'PY'
+        import glob
+        import xml.etree.ElementTree as ET
+
+        ns = {'t': 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010'}
+        for path in glob.glob('TestResults/*.trx'):
+            root = ET.parse(path).getroot()
+            for result in root.findall('.//t:UnitTestResult', ns):
+                if result.get('outcome') != 'Failed':
+                    continue
+                name = result.get('testName', '<unknown>')
+                node = result.find('.//t:Output/t:ErrorInfo/t:Message', ns)
+                message = ' '.join((node.text or '').split())[:800] if node is not None else ''
+                print(f'::error title=Failed test::{name} :: {message}')
+        PY
+
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: ./TestResults
+
     - run: dotnet pack --configuration Release --no-build --output ./nupkgs
 
     - uses: actions/upload-artifact@v4
