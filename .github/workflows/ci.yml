@@ -96,12 +96,18 @@ jobs:
         dotnet-version: '8.0.x'
 
     - name: Publish to NuGet.org
+      id: nuget
       if: env.NUGET_API_KEY != ''
+      continue-on-error: true
       run: >
         dotnet nuget push ./nupkgs/*.nupkg
         --source https://api.nuget.org/v3/index.json
         --api-key "$NUGET_API_KEY"
         --skip-duplicate
+
+    - name: NuGet.org publish failed
+      if: steps.nuget.outcome == 'failure'
+      run: echo "::warning::NuGet.org publish failed (check NUGET secret/permissions); GitHub Packages publish succeeded."
 
     - name: NuGet secret not configured
       if: env.NUGET_API_KEY == ''

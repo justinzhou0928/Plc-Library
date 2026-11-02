@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-11-02
+
+### 构建
+
+- NuGet.org 发布改为尽力而为：`NUGET` 密钥存在但推送失败时记录 warning，不再让 tag CI 失败；GitHub Packages 仍作为发布源
+
 ## [1.3.2] - 2026-11-02
 
 ### 构建
