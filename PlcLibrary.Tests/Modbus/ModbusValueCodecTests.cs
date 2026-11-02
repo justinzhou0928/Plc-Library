@@ -1,4 +1,4 @@
-using PlcLibrary.Modbus;
+﻿using PlcLibrary.Modbus;
 
 namespace PlcLibrary.Tests.Modbus;
 
@@ -60,7 +60,7 @@ public class ModbusValueCodecTests
     [InlineData("String", 25, 13)]
     public void TryGetWordCount_ReturnsExpected(string kindName, int length, int expected)
     {
-        var kind = Enum.Parse<ModbusValueKind>(kindName);
+        var kind = Enum.Parse<TypeCode>(kindName);
         Assert.True(ModbusValueCodec.TryGetWordCount(kind, length, out var actual, out var error), error);
         Assert.Equal(expected, actual);
     }
@@ -99,7 +99,7 @@ public class ModbusValueCodecTests
     [Fact]
     public void Decode_UInt16_ByteSwap()
     {
-        var value = ModbusValueCodec.Decode(new ushort[] { 0x1234 }, ModbusValueKind.UInt16, 0, Order("BA", 2));
+        var value = ModbusValueCodec.Decode(new ushort[] { 0x1234 }, TypeCode.UInt16, 0, Order("BA", 2));
         Assert.Equal((ushort)0x3412, value);
     }
 
@@ -110,7 +110,7 @@ public class ModbusValueCodecTests
     [InlineData("DCBA", 0x7856, 0x3412, 0x12345678)]
     public void Decode_Int32_ByteOrders(string order, ushort word0, ushort word1, int expected)
     {
-        var value = ModbusValueCodec.Decode(new ushort[] { word0, word1 }, ModbusValueKind.Int32, 0,
+        var value = ModbusValueCodec.Decode(new ushort[] { word0, word1 }, TypeCode.Int32, 0,
             Order(order, 4));
         Assert.Equal(expected, Assert.IsType<int>(value));
     }
@@ -120,7 +120,7 @@ public class ModbusValueCodecTests
     [InlineData("CDAB", 0x0000, 0x41A0)]
     public void Decode_Single_ByteOrders(string order, ushort word0, ushort word1)
     {
-        var value = ModbusValueCodec.Decode(new ushort[] { word0, word1 }, ModbusValueKind.Single, 0,
+        var value = ModbusValueCodec.Decode(new ushort[] { word0, word1 }, TypeCode.Single, 0,
             Order(order, 4));
         Assert.Equal(20.0f, Assert.IsType<float>(value));
     }
@@ -132,7 +132,7 @@ public class ModbusValueCodecTests
     public void Decode_Int64_ByteOrders(string order, ushort word0, ushort word1, ushort word2, ushort word3)
     {
         var value = ModbusValueCodec.Decode(new ushort[] { word0, word1, word2, word3 },
-            ModbusValueKind.Int64, 0, Order(order, 8));
+            TypeCode.Int64, 0, Order(order, 8));
         Assert.Equal(0x1122334455667788L, Assert.IsType<long>(value));
     }
 
@@ -141,14 +141,14 @@ public class ModbusValueCodecTests
     {
         var value = ModbusValueCodec.Decode(
             new ushort[] { 0x0000, 0x0000, 0x0000, 0x3FF0 },
-            ModbusValueKind.Double, 0, Order("GHEFCDAB", 8));
+            TypeCode.Double, 0, Order("GHEFCDAB", 8));
         Assert.Equal(1.0, Assert.IsType<double>(value));
     }
 
     [Fact]
     public void Decode_String_Ab()
     {
-        var value = ModbusValueCodec.Decode(new ushort[] { 0x4142, 0x4344 }, ModbusValueKind.String, 4,
+        var value = ModbusValueCodec.Decode(new ushort[] { 0x4142, 0x4344 }, TypeCode.String, 4,
             Order("AB", 2));
         Assert.Equal("ABCD", value);
     }
@@ -156,7 +156,7 @@ public class ModbusValueCodecTests
     [Fact]
     public void Decode_String_Ba()
     {
-        var value = ModbusValueCodec.Decode(new ushort[] { 0x4241, 0x4443 }, ModbusValueKind.String, 4,
+        var value = ModbusValueCodec.Decode(new ushort[] { 0x4241, 0x4443 }, TypeCode.String, 4,
             Order("BA", 2));
         Assert.Equal("ABCD", value);
     }
@@ -164,7 +164,7 @@ public class ModbusValueCodecTests
     [Fact]
     public void Decode_String_OddLength()
     {
-        var value = ModbusValueCodec.Decode(new ushort[] { 0x4142, 0x4300 }, ModbusValueKind.String, 3,
+        var value = ModbusValueCodec.Decode(new ushort[] { 0x4142, 0x4300 }, TypeCode.String, 3,
             Order("AB", 2));
         Assert.Equal("ABC", value);
     }
@@ -173,7 +173,7 @@ public class ModbusValueCodecTests
     public void Decode_String_StopsAtFirstNul()
     {
         var value = ModbusValueCodec.Decode(new ushort[] { 0x4142, 0x4300, 0x4445 },
-            ModbusValueKind.String, 6, Order("AB", 2));
+            TypeCode.String, 6, Order("AB", 2));
         Assert.Equal("ABC", value);
     }
 
@@ -181,11 +181,11 @@ public class ModbusValueCodecTests
     public void Encode_Int32_Cdab_RoundTrips()
     {
         var buffer = new ushort[2];
-        Assert.True(ModbusValueCodec.TryEncode(0x12345678, ModbusValueKind.Int32, 0, Order("CDAB", 4),
+        Assert.True(ModbusValueCodec.TryEncode(0x12345678, TypeCode.Int32, 0, Order("CDAB", 4),
             buffer, out var error), error);
 
         Assert.Equal(new ushort[] { 0x5678, 0x1234 }, buffer);
-        var decoded = ModbusValueCodec.Decode(buffer, ModbusValueKind.Int32, 0, Order("CDAB", 4));
+        var decoded = ModbusValueCodec.Decode(buffer, TypeCode.Int32, 0, Order("CDAB", 4));
         Assert.Equal(0x12345678, Assert.IsType<int>(decoded));
     }
 
@@ -193,11 +193,11 @@ public class ModbusValueCodecTests
     public void Encode_Single_Cdab_RoundTrips()
     {
         var buffer = new ushort[2];
-        Assert.True(ModbusValueCodec.TryEncode(20.0f, ModbusValueKind.Single, 0, Order("CDAB", 4),
+        Assert.True(ModbusValueCodec.TryEncode(20.0f, TypeCode.Single, 0, Order("CDAB", 4),
             buffer, out var error), error);
 
         Assert.Equal(new ushort[] { 0x0000, 0x41A0 }, buffer);
-        var decoded = ModbusValueCodec.Decode(buffer, ModbusValueKind.Single, 0, Order("CDAB", 4));
+        var decoded = ModbusValueCodec.Decode(buffer, TypeCode.Single, 0, Order("CDAB", 4));
         Assert.Equal(20.0f, Assert.IsType<float>(decoded));
     }
 
@@ -205,18 +205,18 @@ public class ModbusValueCodecTests
     public void Encode_String_PadsToLength()
     {
         var buffer = new ushort[4];
-        Assert.True(ModbusValueCodec.TryEncode("ABC", ModbusValueKind.String, 8, Order("AB", 2),
+        Assert.True(ModbusValueCodec.TryEncode("ABC", TypeCode.String, 8, Order("AB", 2),
             buffer, out var error), error);
 
         Assert.Equal(new ushort[] { 0x4142, 0x4300, 0x0000, 0x0000 }, buffer);
-        Assert.Equal("ABC", ModbusValueCodec.Decode(buffer, ModbusValueKind.String, 8, Order("AB", 2)));
+        Assert.Equal("ABC", ModbusValueCodec.Decode(buffer, TypeCode.String, 8, Order("AB", 2)));
     }
 
     [Fact]
     public void Encode_String_TooLong_ReturnsFalse()
     {
         var buffer = new ushort[2];
-        Assert.False(ModbusValueCodec.TryEncode("ABCDE", ModbusValueKind.String, 4, Order("AB", 2),
+        Assert.False(ModbusValueCodec.TryEncode("ABCDE", TypeCode.String, 4, Order("AB", 2),
             buffer, out var error));
         Assert.NotNull(error);
         Assert.Contains("exceeds", error);
@@ -226,7 +226,7 @@ public class ModbusValueCodecTests
     public void Encode_String_NonAscii_ReturnsFalse()
     {
         var buffer = new ushort[2];
-        Assert.False(ModbusValueCodec.TryEncode("中文", ModbusValueKind.String, 4, Order("AB", 2),
+        Assert.False(ModbusValueCodec.TryEncode("中文", TypeCode.String, 4, Order("AB", 2),
             buffer, out var error));
         Assert.NotNull(error);
         Assert.Contains("ASCII", error);
@@ -238,7 +238,7 @@ public class ModbusValueCodecTests
     public void Encode_UInt16_NegativeTwosComplement(int value, ushort expected)
     {
         var buffer = new ushort[1];
-        Assert.True(ModbusValueCodec.TryEncode(value, ModbusValueKind.UInt16, 0, Order("AB", 2),
+        Assert.True(ModbusValueCodec.TryEncode(value, TypeCode.UInt16, 0, Order("AB", 2),
             buffer, out var error), error);
         Assert.Equal(expected, buffer[0]);
     }

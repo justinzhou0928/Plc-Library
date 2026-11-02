@@ -5,7 +5,9 @@ namespace PlcLibrary.General
 {
     internal static class PlcMetrics
     {
-        internal static readonly Meter Meter = new("PlcLibrary", "1.2.0");
+        internal static readonly Meter Meter = new(
+            "PlcLibrary",
+            typeof(PlcMetrics).Assembly.GetName().Version?.ToString(3) ?? "1.0.0");
 
         internal static readonly Counter<long> ReadsTotal = Meter.CreateCounter<long>(
             "plc.reads.total", "points", "Total tag points read");

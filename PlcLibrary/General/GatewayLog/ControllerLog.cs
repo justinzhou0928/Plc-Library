@@ -32,5 +32,9 @@ namespace PlcLibrary.General
         [LoggerMessage(Level = LogLevel.Error,
         Message = "设备 {DeviceId} 校验失败: {Error}")]
         internal static partial void LogDeviceValidationFailed(ILogger logger, string deviceId, string error);
+
+        [LoggerMessage(Level = LogLevel.Warning,
+        Message = "设备 {DeviceId} 采集任务已停止运行，第 {Attempt} 次自动重启（上次错误：{Error}）")]
+        internal static partial void LogActuatorRestarting(ILogger logger, string deviceId, int attempt, string? error);
     }
 }

@@ -26,7 +26,9 @@ namespace PlcLibrary.Controller.Engine
         private readonly IDataPipeline _pipeline;
         private readonly ConcurrentDictionary<string, TaskActuator> _actuators = new();
         private readonly ConcurrentDictionary<string, DeviceConfiguration> _activeConfigs = new();
+        private readonly ConcurrentDictionary<string, RestartState> _restarts = new();
         private readonly SemaphoreSlim _applyLock = new(1, 1);
+        private int _stopping;
 
         public TaskScheduler(
             IServiceProvider sp,
@@ -40,8 +42,19 @@ namespace PlcLibrary.Controller.Engine
             _pipeline = pipeline;
         }
 
+        private const int SupervisionIntervalSeconds = 5;
+        private const int MaxRestartBackoffSeconds = 60;
+        private const int MaxRestartBackoffExponent = 8;
+
+        /// <summary>监督循环周期：扫描已停止的采集任务并按指数退避重建（测试可缩短）。</summary>
+        internal TimeSpan SupervisionInterval { get; set; } = TimeSpan.FromSeconds(SupervisionIntervalSeconds);
+
+        private static readonly TimeSpan MaxRestartBackoff = TimeSpan.FromSeconds(MaxRestartBackoffSeconds);
+
         public async Task ApplyDevicesAsync(IReadOnlyList<DeviceConfiguration> devices, CancellationToken ct = default)
         {
+            if (Volatile.Read(ref _stopping) != 0) return;
+
             await _applyLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
@@ -89,8 +102,85 @@ namespace PlcLibrary.Controller.Engine
             }
         }
 
+        /// <summary>
+        /// 监督循环：推送型采集器的连接失败会让后台循环提前结束（轮询采集器内部自行吞异常），
+        /// 这里按指数退避重建执行器，避免设备永久僵死。
+        /// </summary>
+        internal async Task SuperviseAsync(CancellationToken ct)
+        {
+            using var timer = new PeriodicTimer(SupervisionInterval);
+            try
+            {
+                while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+                {
+                    if (Volatile.Read(ref _stopping) != 0) return;
+                    try
+                    {
+                        await RestartFaultedActuatorsAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        // 监督循环本身不能因单次异常退出；否则卡死设备将永久无人重启。
+                        ControllerLog.LogCollectionFailed(_logger, ex, "supervisor");
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+        }
+
+        internal async Task RestartFaultedActuatorsAsync(CancellationToken ct)
+        {
+            await _applyLock.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                var now = Environment.TickCount64;
+                foreach (var (id, actuator) in _actuators)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (actuator.IsRunning && !actuator.IsStalled)
+                    {
+                        _restarts.TryRemove(id, out _);
+                        continue;
+                    }
+
+                    if (!_activeConfigs.TryGetValue(id, out var device)) continue;
+
+                    var state = _restarts.GetOrAdd(id, static _ => new RestartState());
+                    if (now < state.NextAllowedTicks) continue;
+
+                    state.Attempts++;
+                    var backoffMs = Math.Min(
+                        SupervisionInterval.TotalMilliseconds * Math.Pow(2, Math.Min(state.Attempts - 1, MaxRestartBackoffExponent)),
+                        MaxRestartBackoff.TotalMilliseconds);
+                    state.NextAllowedTicks = now + (long)backoffMs;
+
+                    var reason = actuator.IsStalled
+                        ? "collection stalled: no progress within the collector stall timeout"
+                        : actuator.LastError?.Message;
+                    ControllerLog.LogActuatorRestarting(_logger, id, state.Attempts, reason);
+                    try
+                    {
+                        await StopActuatorAsync(id).ConfigureAwait(false);
+                        await StartActuatorAsync(device, ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        ControllerLog.LogCollectionFailed(_logger, ex, id);
+                    }
+                }
+            }
+            finally
+            {
+                _applyLock.Release();
+            }
+        }
+
         internal async Task StopSchedulerAsync()
         {
+            Interlocked.Exchange(ref _stopping, 1);
+
             var actuators = _actuators.Values.ToArray();
             if (actuators.Length == 0) return;
 
@@ -108,6 +198,7 @@ namespace PlcLibrary.Controller.Engine
 
             _actuators.Clear();
             _activeConfigs.Clear();
+            _restarts.Clear();
             ControllerLog.LogSchedulerStopped(_logger);
         }
 
@@ -117,10 +208,13 @@ namespace PlcLibrary.Controller.Engine
             foreach (var (id, actuator) in _actuators)
             {
                 var protocol = _activeConfigs.TryGetValue(id, out var cfg) ? cfg.Protocol : "unknown";
-                if (actuator.IsRunning)
+                if (actuator.IsRunning && !actuator.IsStalled)
                     list.Add(DeviceHealthInfo.Healthy(id, protocol));
                 else
-                    list.Add(DeviceHealthInfo.Faulted(id, protocol, "Actuator stopped unexpectedly"));
+                    list.Add(DeviceHealthInfo.Faulted(id, protocol,
+                        actuator.IsStalled
+                            ? "Collection stalled: no progress within the collector stall timeout"
+                            : actuator.LastError?.Message ?? "Actuator stopped unexpectedly"));
             }
             return Task.FromResult<IReadOnlyList<DeviceHealthInfo>>(list);
         }
@@ -190,18 +284,25 @@ namespace PlcLibrary.Controller.Engine
             || old.ConnectionTimeout != device.ConnectionTimeout
             || old.CollectionInterval != device.CollectionInterval
             || !old.TagPoints.SequenceEqual(device.TagPoints);
+
+        private sealed class RestartState
+        {
+            public int Attempts;
+            public long NextAllowedTicks;
+        }
     }
 
     internal sealed class TaskSchedulerHost(TaskScheduler scheduler) : BackgroundService
     {
         private readonly TaskScheduler _scheduler = scheduler;
 
-        protected override Task ExecuteAsync(CancellationToken ct) => Task.CompletedTask;
+        protected override Task ExecuteAsync(CancellationToken ct) => _scheduler.SuperviseAsync(ct);
 
         public override async Task StopAsync(CancellationToken ct)
         {
-            await _scheduler.StopSchedulerAsync().ConfigureAwait(false);
+            // 先停监督循环（取消并等待），再停止采集任务，避免停机过程中被重启
             await base.StopAsync(ct).ConfigureAwait(false);
+            await _scheduler.StopSchedulerAsync().ConfigureAwait(false);
         }
 
         public override void Dispose()

@@ -12,7 +12,6 @@ namespace PlcLibrary.Tests.DriverPool;
 public class DeviceSharedPoolStressTests
 {
     private readonly ILogger<DeviceSharedPool> _logger = NullLogger<DeviceSharedPool>.Instance;
-    private readonly ManagedResiliencePipelineRegistry _registry = new();
     private readonly PoolOptions _options = new()
     {
         MaxConnectionsPerDevice = 4,
@@ -40,7 +39,7 @@ public class DeviceSharedPoolStressTests
                 return d.Object;
             });
 
-        var pool = new DeviceSharedPool(_logger, _device, factory.Object, _options, _registry);
+        var pool = new DeviceSharedPool(_logger, _device, factory.Object, _options);
 
         var tasks = new List<Task>();
         for (var i = 0; i < 100; i++)
@@ -74,8 +73,7 @@ public class DeviceSharedPoolStressTests
             });
 
         var pool = new DeviceSharedPool(_logger, _device, factory.Object,
-            new PoolOptions { MaxConnectionsPerDevice = 2, OperationTimeout = TimeSpan.FromSeconds(30) },
-            _registry);
+            new PoolOptions { MaxConnectionsPerDevice = 2, OperationTimeout = TimeSpan.FromSeconds(30) });
 
         var drivers = new IProtocolDriver[3];
 
@@ -110,7 +108,7 @@ public class DeviceSharedPoolStressTests
                 return d.Object;
             });
 
-        var pool = new DeviceSharedPool(_logger, _device, factory.Object, _options, _registry);
+        var pool = new DeviceSharedPool(_logger, _device, factory.Object, _options);
 
         var driver = await pool.AcquireAsync(CancellationToken.None);
 

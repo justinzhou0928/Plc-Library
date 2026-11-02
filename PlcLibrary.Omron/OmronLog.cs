@@ -40,5 +40,9 @@ namespace PlcLibrary.Omron
         [LoggerMessage(Level = LogLevel.Information,
             Message = "Omron FINS 驱动已释放")]
         internal static partial void LogDisposed(ILogger logger);
+
+        [LoggerMessage(Level = LogLevel.Warning,
+            Message = "Omron FINS 批量读取失败，起始地址 {Address}，点位数 {Count}")]
+        internal static partial void LogReadGroupFailed(ILogger logger, Exception ex, string address, int count);
     }
 }

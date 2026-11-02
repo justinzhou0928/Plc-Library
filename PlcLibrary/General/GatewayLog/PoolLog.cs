@@ -44,5 +44,9 @@ namespace PlcLibrary.General
         [LoggerMessage(Level = LogLevel.Information,
         Message = "空闲连接池已回收，释放连接与弹性管线。Device={DeviceId}")]
         internal static partial void LogPoolRecycled(ILogger logger, string deviceId);
+
+        [LoggerMessage(Level = LogLevel.Error,
+        Message = "空闲连接池清理失败（下个周期重试）")]
+        internal static partial void LogPoolCleanupFailed(ILogger logger, Exception ex);
     }
 }

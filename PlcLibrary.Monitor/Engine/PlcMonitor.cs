@@ -1,6 +1,5 @@
-using Microsoft.Extensions.Options;
+﻿using Microsoft.Extensions.Options;
 using PlcLibrary.DriverDomain.Models;
-using PlcLibrary.Monitor.General;
 using PlcLibrary.Monitor.Interfaces;
 using PlcLibrary.Monitor.Models;
 using PlcLibrary.Pipeline.Interfaces;
@@ -17,13 +16,14 @@ namespace PlcLibrary.Monitor.Engine
 {
     internal sealed class PlcMonitor(IOptions<MonitorOptions> options) : IPlcMonitor, IDataHandler
     {
-        private static readonly TimeSpan EvictionPeriod = TimeSpan.FromSeconds(60);
+        private const int EvictionPeriodSeconds = 60;
+        private const int SubscriptionCapacity = 1;
+
+        private static readonly TimeSpan EvictionPeriod = TimeSpan.FromSeconds(EvictionPeriodSeconds);
 
         private readonly TimeSpan _entryIdleTimeout = options.Value.EntryIdleTimeout;
-        private readonly ConcurrentDictionary<PlcPointId, DriverResult> _cache = new();
-        private readonly ConcurrentDictionary<PlcPointId, long> _lastSeen = new();
+        private readonly ConcurrentDictionary<PlcPointId, Entry> _entries = new();
         private readonly ConcurrentDictionary<Guid, Subscription> _subscribers = new();
-        private readonly object _gate = new();
         private int _disposed;
 
         public ValueTask HandleAsync(DriverResult result, CancellationToken ct)
@@ -31,38 +31,23 @@ namespace PlcLibrary.Monitor.Engine
             MonitorMetrics.Updates.Add(1, new TagList { { "device.id", result.DeviceId } });
 
             var key = new PlcPointId(result.DeviceId, result.TagId);
-            var now = DateTime.UtcNow.Ticks;
+            if (!TryStore(key, result, DateTime.UtcNow.Ticks, out var changed) || !changed)
+                return ValueTask.CompletedTask;
 
-            // IDataHandler 不保证串行调用：锁只保护「比较→缓存」的原子性，通知放到锁外避免长持锁
-            var publish = false;
-            lock (_gate)
-            {
-                _lastSeen[key] = now;
-                if (!_cache.TryGetValue(key, out var cached) || Changed(cached, result))
-                {
-                    _cache[key] = result;
-                    publish = true;
-                }
-            }
-
-            if (publish)
-            {
-                MonitorMetrics.Changes.Add(1, new TagList { { "device.id", result.DeviceId } });
-                FanOut(key, result);
-            }
-
+            MonitorMetrics.Changes.Add(1, new TagList { { "device.id", result.DeviceId } });
+            FanOut(key, result);
             return ValueTask.CompletedTask;
         }
 
         public DriverResult? Get(string deviceId, string tagId)
-            => _cache.TryGetValue(new PlcPointId(deviceId, tagId), out var result) ? result : null;
+            => _entries.TryGetValue(new PlcPointId(deviceId, tagId), out var entry) ? entry.Result : null;
 
         public IReadOnlyList<DriverResult> GetDevice(string deviceId)
         {
             var list = new List<DriverResult>();
-            foreach (var (key, result) in _cache)
+            foreach (var (key, entry) in _entries)
                 if (key.DeviceId == deviceId)
-                    list.Add(result);
+                    list.Add(entry.Result);
             return list;
         }
 
@@ -82,16 +67,17 @@ namespace PlcLibrary.Monitor.Engine
         }
 
         private async IAsyncEnumerable<DriverResult> ReadSubscriptionAsync(
-            Subscription sub, string? tagId,[EnumeratorCancellation] CancellationToken ct)
+            Subscription sub, string? tagId, [EnumeratorCancellation] CancellationToken ct)
         {
             try
             {
                 // 先注册、再产出当前快照，避免「读取快照→注册」之间的丢失更新
                 DriverResult? last = null;
-                if (tagId is not null && _cache.TryGetValue(new PlcPointId(sub.DeviceId, tagId), out var current))
+                if (tagId is not null
+                    && _entries.TryGetValue(new PlcPointId(sub.DeviceId, tagId), out var current))
                 {
-                    yield return current;
-                    last = current;
+                    yield return current.Result;
+                    last = current.Result;
                 }
 
                 await foreach (var item in sub.Channel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
@@ -129,8 +115,7 @@ namespace PlcLibrary.Monitor.Engine
             foreach (var (_, sub) in _subscribers)
                 sub.Channel.Writer.TryComplete();
             _subscribers.Clear();
-            _cache.Clear();
-            _lastSeen.Clear();
+            _entries.Clear();
         }
 
         internal void EvictStaleEntries()
@@ -138,12 +123,38 @@ namespace PlcLibrary.Monitor.Engine
             if (Volatile.Read(ref _disposed) != 0 || _entryIdleTimeout <= TimeSpan.Zero) return;
 
             var cutoff = DateTime.UtcNow.Ticks - _entryIdleTimeout.Ticks;
-            foreach (var (key, ticks) in _lastSeen)
+            foreach (var (key, entry) in _entries)
             {
-                if (ticks >= cutoff) continue;
+                if (entry.LastSeenTicks >= cutoff) continue;
                 // 值匹配移除：并发刚更新的条目不会被误删
-                if (_lastSeen.TryRemove(new KeyValuePair<PlcPointId, long>(key, ticks)))
-                    _cache.TryRemove(key, out _);
+                _entries.TryRemove(new KeyValuePair<PlcPointId, Entry>(key, entry));
+            }
+        }
+
+        /// <summary>
+        /// 原子写入缓存条目：值/质量变化时替换并返回 changed=true，仅未变化时刷新最后活跃时间。
+        /// 用 CAS 循环替代全局锁，避免高点数下所有设备串行化；同一变化只有一个线程能 CAS 成功，
+        /// 因此通知仍然只发一次。
+        /// </summary>
+        private bool TryStore(PlcPointId key, DriverResult result, long now, out bool changed)
+        {
+            changed = false;
+            while (true)
+            {
+                if (_entries.TryGetValue(key, out var existing))
+                {
+                    var valueChanged = Changed(existing.Result, result);
+                    var updated = valueChanged ? new Entry(result, now) : existing with { LastSeenTicks = now };
+                    if (!_entries.TryUpdate(key, updated, existing)) continue;
+                    changed = valueChanged;
+                    return true;
+                }
+
+                if (_entries.TryAdd(key, new Entry(result, now)))
+                {
+                    changed = true;
+                    return true;
+                }
             }
         }
 
@@ -171,13 +182,15 @@ namespace PlcLibrary.Monitor.Engine
                 Id = Guid.NewGuid(),
                 DeviceId = deviceId,
                 TagId = tagId,
-                Channel = Channel.CreateBounded<DriverResult>(new BoundedChannelOptions(1)
+                Channel = Channel.CreateBounded<DriverResult>(new BoundedChannelOptions(SubscriptionCapacity)
                 {
                     FullMode = BoundedChannelFullMode.DropOldest,
                     SingleReader = true,
-                    SingleWriter = true,
+                    SingleWriter = false,
                 }),
             };
+
+        private readonly record struct Entry(DriverResult Result, long LastSeenTicks);
     }
 
     internal sealed record Subscription

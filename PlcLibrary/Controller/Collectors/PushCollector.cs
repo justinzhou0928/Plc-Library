@@ -4,7 +4,6 @@ using PlcLibrary.Controller.Engine;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
-using PlcLibrary.DriverPool.Engine;
 using PlcLibrary.DriverPool.Models;
 using PlcLibrary.Extensions;
 using PlcLibrary.General;
@@ -19,22 +18,21 @@ using System.Threading.Tasks;
 
 namespace PlcLibrary.Controller.Collectors
 {
-    internal sealed class PushCollector : IDeviceCollector
+    internal sealed class PushCollector : IDeviceCollector, ICollectorHeartbeat
     {
         private readonly IPushProtocolDriver _driver;
         private readonly DeviceConfiguration _device;
         private readonly ResiliencePipeline _resilience;
         private readonly IDataPipeline _pipeline;
         private readonly ILogger<PushCollector> _logger;
-        private readonly ManagedResiliencePipelineRegistry _pipelineRegistry;
         private readonly IReadOnlyDictionary<string, string> _addressToTag;
+        private long _lastActivityTicks = DateTime.UtcNow.Ticks;
 
         public PushCollector(
             IPushProtocolDriver driver,
             DeviceConfiguration device,
             IDataPipeline pipeline,
             ILogger<PushCollector> logger,
-            ManagedResiliencePipelineRegistry pipelineRegistry,
             IOptions<PoolOptions> poolOptions,
             ILoggerFactory loggerFactory)
         {
@@ -42,10 +40,9 @@ namespace PlcLibrary.Controller.Collectors
             _device = device;
             _pipeline = pipeline;
             _logger = logger;
-            _resilience = pipelineRegistry.GetOrAddPipeline(
-                ResiliencePipelineKeys.Push(device.Id),
-                builder => builder.AddPoolStrategies(poolOptions.Value, loggerFactory.CreateLogger("PushCollector"), device.Id));
-            _pipelineRegistry = pipelineRegistry;
+            _resilience = new ResiliencePipelineBuilder()
+                .AddPoolStrategies(poolOptions.Value, loggerFactory.CreateLogger("PushCollector"), device.Id)
+                .Build();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var point in device.TagPoints.Where(p => !string.IsNullOrEmpty(p.Address)))
@@ -58,6 +55,11 @@ namespace PlcLibrary.Controller.Collectors
             }
             _addressToTag = dict;
         }
+
+        public DateTime LastActivityUtc => new(Volatile.Read(ref _lastActivityTicks), DateTimeKind.Utc);
+
+        // 订阅型设备可能长时间没有值变化，给更宽松的阈值；连接/订阅建立阶段仍由连接超时保护。
+        public TimeSpan StallTimeout { get; } = TimeSpan.FromMinutes(5);
 
         public async Task ExecuteAsync(CancellationToken ct)
         {
@@ -86,6 +88,7 @@ namespace PlcLibrary.Controller.Collectors
                                 : result.TagId
                         };
                         await _pipeline.HandleAsync(enriched, token).ConfigureAwait(false);
+                        Volatile.Write(ref _lastActivityTicks, DateTime.UtcNow.Ticks);
                     }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
@@ -102,8 +105,7 @@ namespace PlcLibrary.Controller.Collectors
             catch { }
             try { await _driver.DisposeAsync().ConfigureAwait(false); }
             catch { }
-            // 随采集器销毁移除设备级弹性管线，避免热更新累积
-            _pipelineRegistry.TryRemove(ResiliencePipelineKeys.Push(_device.Id));
+            // 弹性管线随采集器一并释放（Polly 管线由 GC 回收，无显式 Dispose）
         }
     }
 }

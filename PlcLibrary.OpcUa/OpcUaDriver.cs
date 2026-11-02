@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Opc.Ua;
 using Opc.Ua.Client;
 using PlcLibrary.DriverDomain.Attributes;
@@ -18,6 +18,11 @@ namespace PlcLibrary.OpcUa
     [ProtocolDriverName("OPC_UA")]
     public sealed class OpcUaDriver : IPushProtocolDriver
     {
+        private const int KeepAliveIntervalSeconds = 30;
+        private const uint SubscriptionKeepAliveCount = 10;
+        private const uint SubscriptionLifetimeCount = 20;
+        private const uint MaxNotificationsPerPublish = 1000;
+
         private readonly ILogger<OpcUaDriver> _logger;
         private readonly OpcUaDriverConfig _config;
         private readonly object _stateLock = new();
@@ -84,7 +89,7 @@ namespace PlcLibrary.OpcUa
                 ct).ConfigureAwait(false);
 
             var typedSession = (Session)session;
-            typedSession.KeepAliveInterval = (int)TimeSpan.FromSeconds(30).TotalMilliseconds;
+            typedSession.KeepAliveInterval = (int)TimeSpan.FromSeconds(KeepAliveIntervalSeconds).TotalMilliseconds;
             typedSession.KeepAlive += (_, e) =>
             {
                 if (ServiceResult.IsBad(e.Status))
@@ -359,9 +364,9 @@ namespace PlcLibrary.OpcUa
             => new(null!, new SubscriptionOptions
             {
                 PublishingInterval = config.PublishingInterval,
-                KeepAliveCount = 10,
-                LifetimeCount = 20,
-                MaxNotificationsPerPublish = 1000,
+                KeepAliveCount = SubscriptionKeepAliveCount,
+                LifetimeCount = SubscriptionLifetimeCount,
+                MaxNotificationsPerPublish = MaxNotificationsPerPublish,
                 Priority = 0,
                 PublishingEnabled = true
             });

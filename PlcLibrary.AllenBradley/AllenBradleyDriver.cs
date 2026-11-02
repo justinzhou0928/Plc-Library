@@ -8,6 +8,7 @@ using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.DriverDomain.Parser;
 using PlcLibrary.General.Configuration;
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -56,7 +57,7 @@ namespace PlcLibrary.AllenBradley
             {
                 client = new TagClient(_config.Host, _config.Port, _config.Path, _config.UseConnected);
 
-                await client.ConnectAsync(ct).ConfigureAwait(false);
+                await WithTimeoutAsync(token => client.ConnectAsync(token), ct).ConfigureAwait(false);
 
                 SetState(client, DriverStatus.Connected);
                 AllenBradleyLog.LogConnected(_logger, _config.Host, _config.Port);
@@ -116,6 +117,19 @@ namespace PlcLibrary.AllenBradley
 
             var results = new DriverResult[points.Length];
             var handled = new bool[points.Length];
+            var types = new Type?[points.Length];
+
+            for (var i = 0; i < points.Length; i++)
+            {
+                if (!DataTypeMapper.TryResolve(points[i].DataType, out var resolved))
+                {
+                    results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadConfigError,
+                        $"AllenBradley: unsupported DataType '{points[i].DataType}'");
+                    handled[i] = true;
+                    continue;
+                }
+                types[i] = resolved;
+            }
 
             // 批量：非 string 点位一次 ReadMultipleAsync（返回原始字节，CIP 小端本地解码）
             var batchIndices = new List<int>();
@@ -124,18 +138,18 @@ namespace PlcLibrary.AllenBradley
             for (var i = 0; i < points.Length; i++)
             {
                 ct.ThrowIfCancellationRequested();
-                var type = DataTypeMapper.Resolve(points[i].DataType);
-                if (type == typeof(string)) continue; // string 标签走逐点 ReadStringAsync
+                if (handled[i] || types[i] == typeof(string)) continue; // string 标签走逐点 ReadStringAsync
                 batchIndices.Add(i);
                 batchTags.Add(points[i].Address);
-                batchTypes.Add(type);
+                batchTypes.Add(types[i]!);
             }
 
             if (batchIndices.Count > 0)
             {
                 try
                 {
-                    var raw = await tagClient.ReadMultipleAsync(batchTags, ct).ConfigureAwait(false);
+                    var raw = await WithTimeoutAsync(
+                        token => tagClient.ReadMultipleAsync(batchTags, token), ct).ConfigureAwait(false);
                     for (var j = 0; j < batchIndices.Count; j++)
                     {
                         var idx = batchIndices[j];
@@ -153,13 +167,15 @@ namespace PlcLibrary.AllenBradley
                     // 批量失败：传输级故障置 Faulted；逐点回退保留隔离语义
                     MarkFaultedIfTransport(ex);
                     AllenBradleyLog.LogReadPointFailed(_logger, ex, "batch");
-                    foreach (var idx in batchIndices)
+                    for (var j = 0; j < batchIndices.Count; j++)
                     {
+                        var idx = batchIndices[j];
+                        var type = batchTypes[j];
                         handled[idx] = true;
                         try
                         {
-                            var type = DataTypeMapper.Resolve(points[idx].DataType);
-                            var value = await ReadTypedAsync(tagClient, points[idx].Address, type, ct).ConfigureAwait(false);
+                            var value = await WithTimeoutAsync(
+                                token => ReadTypedAsync(tagClient, points[idx].Address, type, token), ct).ConfigureAwait(false);
                             results[idx] = DriverResult.Good(points[idx].Address, value);
                         }
                         catch (OperationCanceledException) { throw; }
@@ -179,8 +195,9 @@ namespace PlcLibrary.AllenBradley
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    var type = DataTypeMapper.Resolve(points[i].DataType);
-                    var value = await ReadTypedAsync(tagClient, points[i].Address, type, ct).ConfigureAwait(false);
+                    var type = types[i]!;
+                    var value = await WithTimeoutAsync(
+                        token => ReadTypedAsync(tagClient, points[i].Address, type, token), ct).ConfigureAwait(false);
                     results[i] = DriverResult.Good(points[i].Address, value);
                 }
                 catch (OperationCanceledException) { throw; }
@@ -195,25 +212,81 @@ namespace PlcLibrary.AllenBradley
             return results;
         }
 
-        /// <summary>按 CIP 小端序解码原始字节为对应 CLR 类型（BOOL/SINT/INT/DINT/LINT/REAL/LREAL）。</summary>
+        /// <summary>
+        /// 给单次操作套上配置的 <c>timeout</c>：超时转换为 <see cref="TimeoutException"/>（传输级故障），
+        /// 由连接池丢弃驱动；调用方取消仍抛 <see cref="OperationCanceledException"/>。
+        /// </summary>
+        private async Task<T> WithTimeoutAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken ct)
+        {
+            if (_config.Timeout <= 0) return await action(ct).ConfigureAwait(false);
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(_config.Timeout);
+            try
+            {
+                return await action(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new TimeoutException($"AllenBradley operation timed out after {_config.Timeout}ms");
+            }
+        }
+
+        private async Task WithTimeoutAsync(Func<CancellationToken, Task> action, CancellationToken ct)
+            => await WithTimeoutAsync<bool>(async token =>
+            {
+                await action(token).ConfigureAwait(false);
+                return true;
+            }, ct).ConfigureAwait(false);
+
+        /// <summary>
+        /// 解码 <c>TagClient.ReadMultipleAsync</c> 返回的原始值。
+        /// 该 API 对每个点位返回「2 字节 CIP 数据类型码 + 原始数据」，必须跳过并校验类型码，
+        /// 否则类型码会被当作数据：DINT/REAL 整体错位，BOOL 恒为 true（0xC1 != 0），且质量仍为 Good。
+        /// </summary>
+        /// <summary>CLR 类型 → CIP 基本数据类型码（ODVA）；0 表示不支持。</summary>
+        private static ushort ExpectedCipTypeCode(Type type) => Type.GetTypeCode(type) switch
+        {
+            TypeCode.Boolean => 0x00C1,
+            TypeCode.SByte => 0x00C2,
+            TypeCode.Int16 => 0x00C3,
+            TypeCode.Int32 => 0x00C4,
+            TypeCode.Int64 => 0x00C5,
+            TypeCode.Byte => 0x00C6,
+            TypeCode.UInt16 => 0x00C7,
+            TypeCode.UInt32 => 0x00C8,
+            TypeCode.UInt64 => 0x00C9,
+            TypeCode.Single => 0x00CA,
+            TypeCode.Double => 0x00CB,
+            _ => 0,
+        };
+
         private static bool TryDecodeCipValue(Type type, byte[] data, out object? value)
         {
             value = null;
-            if (data.Length == 0) return false;
+            const int typeCodeLength = 2;
+            if (data.Length < typeCodeLength) return false;
 
+            var expectedTypeCode = ExpectedCipTypeCode(type);
+            if (expectedTypeCode == 0) return false;
+
+            var actualTypeCode = (ushort)(data[0] | (data[1] << 8));
+            if (actualTypeCode != expectedTypeCode) return false;
+
+            var payload = data.AsSpan(typeCodeLength);
             switch (Type.GetTypeCode(type))
             {
-                case TypeCode.Boolean: value = data[0] != 0; return true;
-                case TypeCode.SByte: value = unchecked((sbyte)data[0]); return true;
-                case TypeCode.Byte: value = data[0]; return true;
-                case TypeCode.Int16: if (data.Length < 2) return false; value = BitConverter.ToInt16(data, 0); return true;
-                case TypeCode.UInt16: if (data.Length < 2) return false; value = BitConverter.ToUInt16(data, 0); return true;
-                case TypeCode.Int32: if (data.Length < 4) return false; value = BitConverter.ToInt32(data, 0); return true;
-                case TypeCode.UInt32: if (data.Length < 4) return false; value = BitConverter.ToUInt32(data, 0); return true;
-                case TypeCode.Int64: if (data.Length < 8) return false; value = BitConverter.ToInt64(data, 0); return true;
-                case TypeCode.UInt64: if (data.Length < 8) return false; value = BitConverter.ToUInt64(data, 0); return true;
-                case TypeCode.Single: if (data.Length < 4) return false; value = BitConverter.ToSingle(data, 0); return true;
-                case TypeCode.Double: if (data.Length < 8) return false; value = BitConverter.ToDouble(data, 0); return true;
+                case TypeCode.Boolean: value = payload[0] != 0; return true;
+                case TypeCode.SByte: value = unchecked((sbyte)payload[0]); return true;
+                case TypeCode.Byte: value = payload[0]; return true;
+                case TypeCode.Int16: if (payload.Length < 2) return false; value = BinaryPrimitives.ReadInt16LittleEndian(payload); return true;
+                case TypeCode.UInt16: if (payload.Length < 2) return false; value = BinaryPrimitives.ReadUInt16LittleEndian(payload); return true;
+                case TypeCode.Int32: if (payload.Length < 4) return false; value = BinaryPrimitives.ReadInt32LittleEndian(payload); return true;
+                case TypeCode.UInt32: if (payload.Length < 4) return false; value = BinaryPrimitives.ReadUInt32LittleEndian(payload); return true;
+                case TypeCode.Int64: if (payload.Length < 8) return false; value = BinaryPrimitives.ReadInt64LittleEndian(payload); return true;
+                case TypeCode.UInt64: if (payload.Length < 8) return false; value = BinaryPrimitives.ReadUInt64LittleEndian(payload); return true;
+                case TypeCode.Single: if (payload.Length < 4) return false; value = BinaryPrimitives.ReadSingleLittleEndian(payload); return true;
+                case TypeCode.Double: if (payload.Length < 8) return false; value = BinaryPrimitives.ReadDoubleLittleEndian(payload); return true;
                 default: return false;
             }
         }
@@ -232,9 +305,16 @@ namespace PlcLibrary.AllenBradley
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    var type = DataTypeMapper.Resolve(entryList[i].Key.DataType);
-                    await WriteTypedAsync(tagClient, entryList[i].Key.Address,
-                        entryList[i].Value, type, ct).ConfigureAwait(false);
+                    if (!DataTypeMapper.TryResolve(entryList[i].Key.DataType, out var type))
+                    {
+                        results[i] = DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadConfigError,
+                            $"AllenBradley: unsupported DataType '{entryList[i].Key.DataType}'");
+                        continue;
+                    }
+
+                    await WithTimeoutAsync(
+                        token => WriteTypedAsync(tagClient, entryList[i].Key.Address,
+                            entryList[i].Value, type, token), ct).ConfigureAwait(false);
                     results[i] = DriverResult.Good(entryList[i].Key.Address, null);
                 }
                 catch (OperationCanceledException) { throw; }

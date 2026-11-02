@@ -25,6 +25,10 @@ namespace PlcLibrary.General
         Message = "订阅通道已满，数据点已丢弃。Address={Address}")]
         internal static partial void LogSubscriberDropped(ILogger logger, string address);
 
+        [LoggerMessage(Level = LogLevel.Warning,
+        Message = "管道写入超时（{Timeout}），数据点已丢弃。Address={Address}")]
+        internal static partial void LogEnqueueTimedOut(ILogger logger, string address, TimeSpan timeout);
+
         [LoggerMessage(Level = LogLevel.Error,
         Message = "断路器 {DeviceId} 状态变更: {Event}")]
         internal static partial void LogCircuitBreakerEvent(ILogger logger, string deviceId, string @event);

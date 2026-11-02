@@ -1,5 +1,9 @@
 # 开发文档
 
+面向贡献者与维护者：架构、运行时、驱动开发、批量读设计、测试策略与已知限制。
+
+> 使用者文档见 [README.md](./README.md)；AI 代理规则见 [AGENTS.md](./AGENTS.md)；历史评估快照见 [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md)。
+
 ## 架构总览
 
 ```mermaid
@@ -22,15 +26,14 @@ flowchart LR
 
 | 层 | 核心类 | 职责 |
 |------|------|------|
-| 应用层 | `IDeviceScheduler` `IDataHandler` | 推送设备配置，接收采集数据 |
-| 调度层 | `TaskScheduler` `TaskActuator` `TaskSchedulerHost` | 差量 reconcile，定时采集；`TaskSchedulerHost : BackgroundService` 薄封装接管生命周期 |
-| 连接池层 | `DeviceDriverPool` `DeviceSharedPool` | 连接复用，Polly 弹性策略 |
-| 驱动层 | `IProtocolDriver`（S7 / Modbus / ...） | 协议通信 |
-| 管道层 | `DriverResultPipeline` `PipelineHost` | Channel 消费，fan-out 到 Handler；`PipelineHost : BackgroundService` 薄封装接管生命周期 |
+| 应用层 | `IDeviceScheduler`、`IDataHandler`、`IDeviceAccessor` | 下发配置、接收数据、主动读写 |
+| 调度层 | `TaskScheduler`、`TaskActuator`、`TaskSchedulerHost` | 差量 reconcile、采集循环、失败监督 |
+| 连接池层 | `DeviceDriverPool`、`DeviceSharedPool` | 连接复用、Polly 弹性、空闲回收 |
+| 驱动层 | `IProtocolDriver`、`IPushProtocolDriver` | 协议通信与编解码 |
+| 管道层 | `DriverResultPipeline`、`PipelineHost` | Channel 消费、fan-out、背压 |
+| 扩展 | `PlcLibrary.Monitor` | 最新值缓存 + 变化订阅（`IDataHandler`） |
 
-分层原则：上层依赖下层，下层不感知上层。`Channel<DriverResult>` 解耦调度层与管道层。
-
-可选扩展包 `PlcLibrary.Monitor` 在应用层之上提供「实时值监控缓存」：它本身实现 `IDataHandler` 挂接管道，按 `(DeviceId, TagId)` 缓存最新值，仅把值或质量状态发生变化的点位推送给宿主订阅方（`IPlcMonitor`），屏蔽轮询产生的重复（干扰）消息。订阅通道容量固定为 1（latest-wins）。
+分层原则：上层依赖下层，下层不感知上层；`Channel<DriverResult>` 解耦调度与管道。`TaskScheduler`、`DriverResultPipeline`、`PlcMonitor` 是纯业务类，`*Host : BackgroundService` 只接管宿主生命周期。
 
 ## 运行时序列
 
@@ -39,528 +42,312 @@ flowchart LR
 sequenceDiagram
     participant App as 应用
     participant S as TaskScheduler
+    participant H as TaskSchedulerHost
     participant A as TaskActuator
-    participant P as DeviceDriverPool<br/>DeviceSharedPool
+    participant P as DeviceDriverPool
     participant D as IProtocolDriver
     participant PL as DriverResultPipeline
 
-    Note over App,PL: 启动
     App->>S: ApplyDevicesAsync(devices)
-    S->>A: 新建 + StartAsync()
-
-    Note over A,PL: 采集循环
+    S->>A: 创建 + StartAsync()
+    H->>S: SuperviseAsync（5s 周期）
     loop 每个 CollectionInterval
         A->>P: ReadAsync()
         P->>D: Acquire → ReadAsync
         D-->>A: DriverResult[]
-        A->>PL: HandleAsync() [Channel.WriteAsync]
+        A->>PL: HandleAsync()（Channel.WriteAsync）
     end
-
-    Note over PL: 消费
-    PL->>PL: Channel.ReadAllAsync [循环消费]
+    PL->>PL: ReadAllAsync → DispatchAsync
     PL->>App: IDataHandler.HandleAsync()
 ```
 
-## 分层职责
+## 调度层
 
-### 调度层
+`TaskScheduler` 实现 `IDeviceScheduler`，按 `Id` 做差量 reconcile：
 
-`TaskScheduler` 实现 `IDeviceScheduler`，纯业务类，不继承框架基类。`TaskSchedulerHost : BackgroundService` 是薄封装，仅接管宿主生命周期：
+- 新增设备 → 创建 `TaskActuator` 并启动
+- 配置变更（协议/连接串/超时/采集周期/点位集合）→ 停止并重建
+- 设备移除/禁用 → 停止并释放
+- 非法配置/未注册协议/重复 Id → 跳过并记录日志
+- `_applyLock`（`SemaphoreSlim`）串行化所有 apply/重启操作
+
+`TaskActuator` 持有采集器与 `CancellationTokenSource`：
+
+- `ExecuteAsync` 捕获**所有**异常，记录到 `LastError`，循环结束但不产生未观察任务异常
+- `StopAsync` 不向调用方抛异常；`IsRunning` 反映循环是否仍在运行
+- `GetDeviceHealthAsync` 返回 `IsRunning=false` + `LastError`
+
+`TaskSchedulerHost` 承载监督循环：
 
 ```csharp
-internal sealed class TaskScheduler : IDeviceScheduler
+protected override Task ExecuteAsync(CancellationToken ct) => _scheduler.SuperviseAsync(ct);
+
+public override async Task StopAsync(CancellationToken ct)
 {
-    public async Task ApplyDevicesAsync(...) { /* 差量 reconcile */ }
-    internal async Task StopSchedulerAsync() { /* 停止所有 TaskActuator */ }
-    internal void DisposeResources() { /* 释放 SemaphoreSlim */ }
-    public Task<IReadOnlyList<DeviceHealthInfo>> GetDeviceHealthAsync(CancellationToken ct) { /* 健康状态 */ }
-}
-
-internal sealed class TaskSchedulerHost(TaskScheduler scheduler) : BackgroundService
-{
-    protected override Task ExecuteAsync(CancellationToken ct) => Task.CompletedTask;
-
-    public override async Task StopAsync(CancellationToken ct)
-    {
-        await scheduler.StopSchedulerAsync();
-        await base.StopAsync(ct);
-    }
-
-    public override void Dispose()
-    {
-        scheduler.DisposeResources();
-        base.Dispose();
-    }
+    await base.StopAsync(ct);                  // 先取消并等待监督循环
+    await _scheduler.StopSchedulerAsync();     // 再停止执行器
 }
 ```
 
-- `ApplyDevicesAsync` — 差量 reconcile：对比当前与目标设备列表，新增/更新/移除对应的 `TaskActuator`
-- `TaskSchedulerHost.StopAsync` — 宿主关闭时停止所有 `TaskActuator`
+监督策略：每 `SupervisionInterval`（默认 5s）扫描，`IsRunning=false` 或**心跳超时**的执行器按指数退避（周期 × 2^n，最长 60s）重建采集器与驱动，成功后计数清零。轮询采集器内部吞异常、通常不会退出；推送驱动（OPC UA）连接失败会让循环提前结束。
 
-`TaskActuator` 每个设备一个实例，内部使用 `PeriodicTimer` 驱动采集循环：
+- **心跳**：`PollingCollector` 每个采集周期结束（成功或失败）刷新；`PushCollector` 每次成功分发刷新。轮询阈值 `max(4 × CollectionInterval, 30s)`，推送阈值 5 分钟；`TaskActuator.IsStalled` 由监督循环检查，健康状态返回 `Faulted`
+- **有界停止**：`TaskActuator.StopAsync` 等待循环退出（默认 10s），超时后强制释放采集器（默认再等 5s）并放弃旧循环；监督/停机不会因一个不响应取消的采集循环永久挂起
+- **监督自愈**：`SuperviseAsync` 对单轮异常记录日志后继续，不会因一次异常退出监督循环
 
-```csharp
-// 伪代码
-using var timer = new PeriodicTimer(device.CollectionInterval);
-while (await timer.WaitForNextTickAsync(ct))
-{
-    var results = await accessor.ReadAsync(device, points, ct);
-    foreach (var r in results)
-        await pipeline.HandleAsync(r with { DeviceId = device.Id, TagId = ... }, ct);
-}
-```
+## 连接池层
 
-### 连接池层
-
-`DeviceDriverPool` 实现 `IDeviceAccessor`，对外提供 `ReadAsync` / `WriteAsync`。
-
-`DeviceSharedPool` 按连接键分组，每组维护：
+`DeviceDriverPool` 实现 `IDeviceAccessor`，按 `协议|连接串` 维护 `DeviceSharedPool`：
 
 | 组件 | 作用 |
 |------|------|
 | `SemaphoreSlim` | 限制并发连接数（`MaxConnectionsPerDevice`） |
-| `ConcurrentQueue<IProtocolDriver>` | 空闲连接队列，先取后建 |
-| `ResiliencePipeline` | Polly 弹性管线（重试 + 超时 + 断路器），跟随连接池（`Pool:{Protocol}|{ConnectionString}`） |
+| `ConcurrentQueue<IProtocolDriver>` | 空闲驱动队列（先取后建） |
+| `ResiliencePipeline` | 连接级 Polly 管线（重试 + 超时 + 断路器），**由池自持** |
 
-### 池生命周期与回收
-
-- **连接级管线键跟随连接池**（`Pool:{Protocol}|{ConnectionString}`）：多设备共享同一连接串时共享管线；池回收时一并移除。
-- **空置 TTL 回收**：`DeviceSharedPool` 维护在途借用计数 `_inUse` 与最后活动时间；`DeviceDriverPool` 内置定时器（60s 周期）扫描，空置超过 `PoolOptions.PoolIdleTimeout`（默认 10 分钟，0 禁用）且无在途借用的池被销毁（释放空闲驱动、移除弹性管线）。热更新频繁增删设备不再累积连接与管线。
-- **推送管线**：`Push:{deviceId}` 由 `PushCollector` 创建，随采集器 `DisposeAsync` 移除（订阅是专用长连接，不走池，见下文"Push 双轨设计"）。
-- **注册表**：Polly 原生 `ResiliencePipelineRegistry` 只有 `GetOrAddPipeline` 无法移除，库内使用 `ManagedResiliencePipelineRegistry`（包装字典 + `TryRemove`/`Clear`）实现生命周期管理。
-
-### Push 双轨设计（设计决策）
-
-轮询驱动（S7/Modbus/AB/...）的读操作经连接池借用/归还；`IPushProtocolDriver`（OPC UA 订阅）使用**专用长连接**——订阅状态（MonitoredItem、发布队列）绑定驱动实例，池化借用会破坏订阅语义。故 `PushCollector` 为每设备创建独立驱动实例 + 独立连接级弹性管线（`Push:{id}`），与轮询池双轨并存，二者互不干扰。
-
-连接池获取流程：
+### 获取与归还
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
 flowchart TD
-    A[AcquireAsync] --> B{空闲队列?}
-    B -->|有| C[复用]
-    B -->|无| D[CreateAsync]
-    D --> E{已连接?}
-    E -->|否| F[ConnectAsync<br/>Polly 重试/超时/熔断]
-    E -->|是| G[返回]
-    F --> G
-    C --> G
+    A[AcquireAsync] --> B{回收中?}
+    B -->|是| R[PoolRecycledException<br/>上层重取池]
+    B -->|否| C{空闲队列?}
+    C -->|有| D[复用]
+    C -->|无| E[CreateAsync]
+    D --> F{已连接?}
+    E --> F
+    F -->|否| G[ConnectAsync<br/>Polly 重试/超时/熔断]
+    F -->|是| H[返回]
+    G --> H
 ```
 
-### 管道层
+- 借用成功 `_inUse++`；归还 `_inUse--`，Faulted 驱动直接释放
+- 连接失败/超时由池管线重试；断路器打开时快速失败
+- `Return` 时若池已被回收，直接释放驱动，不触碰已释放的信号量
+- **硬超时**：IO 在 Polly 超时之外再等 2s（`HardTimeoutGrace`），连接在 `ConnectionTimeout` 之外再等 2s；底层调用不响应取消令牌时也会返回，驱动按 `discard` 丢弃，不回到 idle 队列
+- **归还顺序**：正常归还先入 idle 队列、再减少 `_inUse`，避免清理线程在“已减计数、尚未入队”窗口销毁池导致驱动泄漏；`DisposeAsync` 与 `Return` 通过 `_gate` 协调
+- **有界释放**：`DisposeAsync` 最多等 5s；超时后记录日志并放弃等待，避免一个坏驱动的 Dispose 拖住整个归还/清理流程
 
-`DriverResultPipeline` 实现 `IDataPipeline`，纯业务类。`PipelineHost : BackgroundService` 是薄封装：
+### 生命周期与回收
 
-```csharp
-internal sealed class DriverResultPipeline : IDataPipeline
-{
-    public ValueTask HandleAsync(DriverResult result, CancellationToken ct);
-    public async Task ConsumeAsync(CancellationToken ct) { /* await foreach channel */ }
-    internal void StopConsuming() { /* channel.Writer.TryComplete */ }
-    internal void DisposeResources() { /* 释放 Channel + Subscriber */ }
-}
+- **池持有管线**：`DeviceSharedPool` 构造时自建 Polly 管线，池销毁即回收；不存在全局注册表或跨设备共享状态
+- **空闲回收**：`DeviceDriverPool` 用 `PeriodicTimer`（60s）扫描；池空置超过 `PoolIdleTimeout` 且 `_inUse == 0` 时，先 `TryBeginRecycle` 原子标记，再移除并销毁。并发借用会得到 `PoolRecycledException` 并由 `DeviceDriverPool.AcquireAsync` 重取池重试，避免与已释放信号量竞争
+- **清理异常**：按周期记录并重试，不终止清理循环；停机时等待清理循环退出
 
-internal sealed class PipelineHost(DriverResultPipeline pipeline) : BackgroundService
-{
-    protected override async Task ExecuteAsync(CancellationToken ct)
-        => await pipeline.ConsumeAsync(ct);
+### Push 双轨设计
 
-    public override async Task StopAsync(CancellationToken ct)
-    {
-        pipeline.StopConsuming();
-        await base.StopAsync(ct);
-    }
+轮询驱动按次借用连接。`IPushProtocolDriver`（OPC UA）的订阅状态（MonitoredItem、发布队列）绑定驱动实例，池化会破坏订阅语义，因此 `PushCollector` 为每台设备创建独立驱动与连接级管线，与轮询池并存、互不干扰。推送采集器异常结束由调度器监督循环重建。
 
-    public override void Dispose()
-    {
-        pipeline.DisposeResources();
-        base.Dispose();
-    }
-}
-```
+## 管道层
 
-`ConsumeAsync` 内 `await foreach` 消费 `Channel<DriverResult>`，fan-out 到所有 `IDataHandler`。
+`DriverResultPipeline` 持有有界 `Channel<DriverResult>`（`Capacity`），`PipelineHost` 驱动消费：
 
-管道消费：
-
-```mermaid
-%%{init: {'theme': 'neutral'}}%%
-flowchart LR
-    W[TaskActuator] -->|WriteAsync| CH{{BoundedChannel}}
-    CH -->|ReadAllAsync| D[DispatchAsync]
-    D -->|并行| H1[Handler 1]
-    D -->|并行| H2[Handler 2]
-```
-
-特性：
-- 背压控制：`BoundedChannelFullMode.Wait`，消费者跟不上则阻塞生产者
-- Handler 并行度：`Parallel.ForEachAsync` + `MaxDegreeOfParallelism` 控制并发，各 Handler 公平调度
-- Handler 超时：每个 Handler 独立 `CancellationTokenSource.CancelAfter(HandlerTimeout)`
-- 订阅通道背压告警：`IDataPipeline.ReadAsync` 的 sub Channel 满时 `DropOldest` 并记录日志
+- `HandleAsync`：先尝试写入有界队列；超过 `EnqueueTimeout`（默认 5s）仍无空间则丢弃该点并计入 `plc.pipeline.dropped`，避免采集循环被反压永久卡住
+- `ConsumeAsync`：`ReadAllAsync` 串行消费，逐条 `DispatchAsync`
+- 分发：单 handler 直接调用（快路径）；多 handler 按 `MaxHandlerParallelism` 并行；每个 handler 的 `HandlerTimeout` 是**硬上限**（`WaitAsync`），即使忽略取消令牌也不会卡住分发；超时/异常只记录不干扰其它 handler
+- 订阅：`IDataPipeline.ReadAsync` 为每个订阅者建容量 1000 的通道，满时 `DropOldest` 并计数/记录
+- 停机：`StopConsuming` 完成 Writer，`DisposeResources` 完成所有订阅通道
 
 ## 编写自定义驱动
 
 ### 1. 连接字符串绑定
 
-连接字符串 `key:value;key:value` → `ConnectionStringBinder.Bind<T>()`：
-
-```mermaid
-%%{init: {'theme': 'neutral'}}%%
-flowchart LR
-    A["host:192.168.1.1;port:502"] --> B["KeyValueConnectionString.Parse()"]
-    B --> C["ConfigurationBuilder.Get&lt;T&gt;()"]
-    C --> D["强类型实例"]
-```
-
-**简单场景（无 enum 或 enum 兼容）—— 一行：**
+配置使用 `record` + `ConnectionStringBinder`（基于 `IConfiguration` 绑定，大小写不敏感）：
 
 ```csharp
-public static MyConfig Parse(string cs)
-    => ConnectionStringBinder.Bind<MyConfig>(cs);
-```
-
-**含第三方 enum（如 S7.Net.CpuType）—— Bind + 手动补 enum：**
-
-```csharp
-public static S7DriverConfig Parse(string cs)
+public sealed record MyDriverConfig
 {
-    var config = ConnectionStringBinder.Bind<S7DriverConfig>(cs);
-    var dict = KeyValueConnectionString.Parse(cs);
-    if (dict.TryGetValue("cpu", out var cpu) && Enum.TryParse<CpuType>(cpu, true, out var t))
-        config = config with { CpuType = t };
-    return config;
+    public string Host { get; init; } = "127.0.0.1";
+    public int Port { get; init; } = 5000;
+    public int Timeout { get; init; } = 3000;
+
+    public static MyDriverConfig Parse(string connectionString)
+        => ConnectionStringBinder.Bind<MyDriverConfig>(connectionString);
 }
 ```
 
-`Bind<T>()` 处理 int、string、short、bool 等内置类型；第三方 enum 可能绑定失败，通过 `with` 表达式仅覆盖该字段。
+> 绑定器忽略未知键；配置拼写错误会静默使用默认值（见「已知限制」）。
 
-> **配置-消费约束**：新增的驱动配置字段**必须**在驱动源码中被消费（`_config.X` 引用）。
-> `DriverConfigConsumptionTests` 会逐一断言每个 `*DriverConfig` 公共属性都被对应驱动引用，
-> 防止"文档声称可配、代码未生效"类问题（曾出现 OPC UA security、BACnet deviceinstance 等）。
-> 若某字段确因第三方库限制无法应用，必须加入该测试的 `KnownUnused` 例外清单并注明原因。
+### 2. 数据类型
 
-### 1.1 数据类型映射
+`DataTypeMapper.TryResolve` 解析简写/IEC 别名/`System.*` 全名；未知类型返回 `false`，驱动应返回 `BadConfigError` 而不是回退 `int`。`Resolve` 仅用于兼容既有默认行为（空值 → `int`）。
 
-当驱动需要根据 `TagPointConfiguration.DataType` 确定读写类型时，使用共享的 `DataTypeMapper`：
+### 3. 实现 `IProtocolDriver`
 
 ```csharp
-using PlcLibrary.DriverDomain.Parser;
-
-var type = DataTypeMapper.Resolve(points[i].DataType);
-// type: typeof(int), typeof(float), typeof(bool), 等
-// 未指定 DataType 时默认返回 typeof(int)
-```
-
-严格解析用 `DataTypeMapper.TryResolve`（未知名称返回 `false`），避免拼写错误静默回退到 `int`。
-
-支持的类型简写：`bool`/`short`/`ushort`/`int`/`uint`/`long`/`ulong`/`float`/`double`/`string` 以及对应的 `System.Xxx` 完整名称；另支持 IEC 别名 `int16`/`uint16`/`int32`/`uint32`/`int64`/`uint64`/`real`/`lreal`/`sint`/`usint`/`dint`/`udint`/`lint`/`ulint`/`word`/`dword`/`lword`。
-
-Modbus 的多寄存器编解码集中在 `PlcLibrary.Modbus.ModbusValueCodec`（internal，测试通过 `InternalsVisibleTo` 访问）：`DataType + Length + ByteOrder` → WordCount/CLR 值，读写共用，避免各驱动重复实现字节序。
-
-### 2. 实现 IProtocolDriver
-
-```csharp
-using PlcLibrary.DriverDomain.Attributes;
-using PlcLibrary.DriverDomain.Enums;
-using PlcLibrary.DriverDomain.Interfaces;
-using PlcLibrary.DriverDomain.Models;
-using PlcLibrary.General.Configuration;
-
 [ProtocolDriverName("MyProtocol")]
-public sealed class MyProtocolDriver(ILogger<MyProtocolDriver> logger, DeviceConfiguration device) : IProtocolDriver
+public sealed class MyDriver(ILogger<MyDriver> logger, DeviceConfiguration device) : IProtocolDriver
 {
-    private readonly MyProtocolConfig _config = MyProtocolConfig.Parse(device.ConnectionString);
-
-    public DriverStatus DriverStatus { get; private set; }
-
-    public async Task ConnectAsync(CancellationToken ct = default)
-    {
-        DriverStatus = DriverStatus.Connecting;
-        // 建立连接...
-        DriverStatus = DriverStatus.Connected;
-    }
-
-    public Task DisconnectAsync(CancellationToken ct = default)
-    {
-        // 断开连接...
-        DriverStatus = DriverStatus.Disconnected;
-        return Task.CompletedTask;
-    }
-
-    public async Task<bool> TryReconnectAsync(CancellationToken ct = default)
-    {
-        try
-        {
-            await DisconnectAsync(ct);
-            await ConnectAsync(ct);
-            return true;
-        }
-        catch
-        {
-            DriverStatus = DriverStatus.Faulted;
-            return false;
-        }
-    }
-
-    public async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct)
-    {
-        var results = new DriverResult[points.Length];
-        for (var i = 0; i < points.Length; i++)
-        {
-            try
-            {
-                var value = await ReadPointAsync(points[i].Address, ct);
-                results[i] = DriverResult.Good(points[i].Address, value);
-            }
-            catch (Exception ex)
-            {
-                results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadCommFailure, ex.Message);
-            }
-        }
-        return results;
-    }
-
-    public async Task<DriverResult[]> WriteAsync(
-        IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct)
-    {
-        var results = new DriverResult[values.Count];
-        var i = 0;
-        foreach (var (point, value) in values)
-        {
-            try
-            {
-                await WritePointAsync(point.Address, value, ct);
-                results[i] = DriverResult.Good(point.Address, null);
-            }
-            catch (Exception ex)
-            {
-                results[i] = DriverResult.Bad(point.Address, QualityCode.BadCommFailure, ex.Message);
-            }
-            i++;
-        }
-        return results;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        await DisconnectAsync();
-    }
+    public DriverStatus DriverStatus { get; }
+    public Task ConnectAsync(CancellationToken ct = default);
+    public Task DisconnectAsync(CancellationToken ct = default);
+    public Task<bool> TryReconnectAsync(CancellationToken ct = default);
+    public Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default);
+    public Task<DriverResult[]> WriteAsync(IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default);
+    public ValueTask DisposeAsync();
 }
 ```
 
-### 3. 注册
+约定：
+
+- `ReadAsync` 结果数组与输入点位**一一对应**；单点失败用 `DriverResult.Bad`，不要抛异常
+- 传输级故障（socket/IO/超时）置 `DriverStatus.Faulted`（可用 `TransportFailureDetector.IsTransportFailure`），连接池据此丢弃重建
+- 传输异常可抛出，由池的 IO 级重试处理；业务/点位错误返回 Bad
+- `ConnectAsync` 失败置 `Faulted` 并抛出；`TryReconnectAsync` 返回 bool，不抛出（取消除外）
+- 释放所有 socket/客户端；`DisposeAsync` 先断开再释放
+- 分页/批量读取时按组隔离错误；未支持的类型返回 `BadConfigError`
+
+### 4. 注册
 
 ```csharp
-// 协议名从 [ProtocolDriverName] 属性自动获取
-builder.Services.AddDriver<ModbusDriver>();
+services.AddPlcLibrary().AddDriver<MyDriver>();
 ```
 
-> `DeviceConfiguration.Protocol` 必须与 `[ProtocolDriverName]` 的值**完全一致（区分大小写）**。`TaskScheduler` 按字符串精确匹配，别名（如 `"OPC UA"` 之于 `"OPC_UA"`）不会报错，但设备会被记录 `LogProtocolUnregistered` 后跳过。
+`AddDriver<T>` 读取 `[ProtocolDriverName]`，按 `IPushProtocolDriver` 自动标记 `SupportsPush`。`Protocol` 必须精确匹配。
 
-## 接口参考
+### 5. 测试
 
-### IProtocolDriver
+新增驱动必须配套**离线协议回环**（本机起真实协议服务端，动态端口，见「测试策略」），至少覆盖：
 
-| 成员 | 返回 | 说明 |
-|------|------|------|
-| `DriverStatus` | `DriverStatus` | Disconnected / Connecting / Connected / Faulted |
-| `ConnectAsync(ct)` | `Task` | 建立物理连接，框架通过 Polly 保护调用 |
-| `DisconnectAsync(ct)` | `Task` | 断开连接，不应抛异常 |
-| `TryReconnectAsync(ct)` | `Task<bool>` | 断开后重连，失败置 Faulted 并返回 false |
-| `ReadAsync(points, ct)` | `Task<DriverResult[]>` | 批量读，结果顺序须与输入一致 |
-| `WriteAsync(values, ct)` | `Task<DriverResult[]>` | 批量写，结果顺序与输入一致 |
-| `DisposeAsync()` | `ValueTask` | 释放资源（`IAsyncDisposable`） |
+- 连接/断开/重连与 `Faulted` 状态
+- 读取：类型、顺序、字节序、越界/非法地址隔离
+- 写入：到达服务端并回读一致
+- 批量请求次数（用服务端计数或抓帧断言）
+- 错误码 → `QualityCode` 映射
 
-### DriverResult
+## 弹性与超时
 
-```csharp
-public readonly record struct DriverResult
-{
-    public string DeviceId { get; init; }   // 框架自动注入
-    public string TagId { get; init; }      // 框架自动注入
-    public string Address { get; init; }    // 驱动填写
-    public object? Value { get; init; }     // 驱动填写
-    public QualityCode Status { get; init; } // 驱动填写
-    public string? ErrorMessage { get; init; }
-    public DateTime Timestamp { get; init; } // 框架设定 UTC
+| 级别 | 作用域 | 策略 | 位置 |
+|---|---|---|---|
+| 连接级 | `ConnectAsync`/`TryReconnectAsync` | 重试 + 超时 + 断路器（每池） | `DeviceSharedPool` |
+| IO 级 | `ReadAsync`/`WriteAsync` | 重试 + 超时（进程级） | `DeviceDriverPool` |
 
-    public static DriverResult Good(string address, object? value);
-    public static DriverResult Bad(string address, QualityCode status, string error);
-}
-```
+- IO 级只对抛出的异常重试；Bad 结果不触发
+- 驱动应把配置的 `timeout` 应用到单次操作：AB 用链接 CTS 包住每次调用；Modbus TCP 用于连接建立与收发；S7/OPC UA 传给底层客户端
+- `DeviceConfiguration.ConnectionTimeout` 是**池借用超时**，不是协议连接超时
 
-驱动只需填写 `Address`、`Value`、`Status`，`DeviceId` 和 `TagId` 由 `TaskActuator` 通过 `with` 表达式注入。
+## 可观测性埋点
 
-### QualityCode
-
-| 枚举 | 值 | 场景 |
-|------|------|------|
-| `Good` | 0x00 | 读取正常 |
-| `Uncertain` | 0x40 | 数据可信度低 |
-| `BadTimeout` | 0x80 | 操作超时 |
-| `BadCommFailure` | 0x81 | 通信失败 |
-| `BadConfigError` | 0x82 | 配置错误 |
-| `BadDeviceFault` | 0x83 | 设备故障 |
-| `BadOutOfService` | 0x84 | 设备停用 |
-| `Offline` | 0xC0 | 离线 |
-| `Initializing` | 0xC1 | 初始化中 |
-
-## 连接池弹性策略
-
-Polly 弹性分为两级，每设备独立隔离：
-
-**连接级** — `DeviceSharedPool.AcquireAsync`
-
-连接获取时包入 Polly 管线，在 `ConnectAsync` / `TryReconnectAsync` 阶段生效。策略链：
-
-```mermaid
-%%{init: {'theme': 'neutral'}}%%
-flowchart LR
-    重试[指数退避重试 3次] --> 超时[OperationTimeout 10s]
-    超时 --> CB{断路器}
-    CB -->|关闭| OK[连接成功]
-    CB -->|熔断| REJ[拒绝，冷却30s]
-```
-
-**IO 级** — `DeviceDriverPool.ReadAsync` / `WriteAsync`
-
-每次 `ReadAsync`/`WriteAsync` **抛出异常**时自动重试，在同一驱动实例上执行，排除 `OperationCanceledException` 和 `TimeoutRejectedException`。
-
-```mermaid
-%%{init: {'theme': 'neutral'}}%%
-flowchart LR
-    READ[driver.ReadAsync] -->|异常| R1{重试条件}
-    R1 -->|满足| READ
-    R1 -->|OCE/TRE| FAIL[向上抛]
-    R1 -->|耗尽| FAIL
-    READ -->|成功| DONE[返回结果]
-```
-
-**断线检测与自动重连**（驱动层契约）：
-
-- 驱动在批量读/写捕获到**传输级故障**（`SocketException`/`IOException`/`TimeoutException`/`ObjectDisposedException`，由 `TransportFailureDetector` 判定）时，应将 `DriverStatus` 置为 `Faulted`，同时保留逐点 `DriverResult.Bad` 语义（不重抛）。
-- 连接池 `DeviceSharedPool.Return` 见 `Faulted` 驱动即丢弃并释放连接额度；下次 `AcquireAsync` 创建新驱动并走连接级弹性（重试 + 断路器），实现"坏连接自动淘汰、PLC 恢复后自动重建"。
-- 点位级/业务级错误（设备返回错误码、地址不存在等）**不应**置 `Faulted`，避免误触发重建。
-
-两级策略均复用 `PoolOptions` 中的 `MaxRetryAttempts`、`RetryDelay`、`OperationTimeout` 配置项。
-
-每设备独立的 Pipeline 键为 `Pool:{device.Id}`（连接级）和 `IO:{device.Id}`（IO 级，通过 `DeviceDriverPool` 内置 builder 创建），故障隔离。
-
-## 可观测性
-
-### Meter: `PlcLibrary`
-
-通过 `System.Diagnostics.Metrics`（`System.Diagnostics.DiagnosticSource` 包，.NET 6+ 默认引用）暴露指标，无需额外 NuGet 包。
-
-| 指标名 | 类型 | 说明 |
+| Span | 位置 | 标签 |
 |---|---|---|
-| `plc.reads.total` | `Counter<long>` | 累计采集点数（带 device.id/device.protocol 标签） |
-| `plc.read.duration` | `Histogram<double>` | ReadAsync 耗时分布（s），含 IO 重试 |
-| `plc.read.errors` | `Counter<long>` | ReadAsync 最终失败次数 |
-| `plc.write.total` | `Counter<long>` | 累计写操作数 |
-| `plc.acquire.duration` | `Histogram<double>` | 连接池获取驱动耗时（s），含 connect |
-| `plc.pipeline.dispatched` | `Counter<long>` | 管道分发点数（带 device.id 标签） |
-| `plc.pipeline.dropped` | `Counter<long>` | 订阅通道溢出丢弃数 |
+| `PlcLibrary.ReadAsync` | `DeviceDriverPool.ReadAsync` | device.id/device.protocol/point.count |
+| `PlcLibrary.WriteAsync` | `DeviceDriverPool.WriteAsync` | device.id/device.protocol/point.count |
+| `PlcLibrary.Acquire` | `DeviceSharedPool.AcquireAsync` | device.id/device.protocol |
+| `PlcLibrary.Dispatch` | `DriverResultPipeline.DispatchAsync` | device.id/tag.id/status |
 
-### 分布式追踪（ActivitySource）
+指标清单与 PromQL 示例见 [README](./README.md#可观测性)；埋点原则：
 
-库内埋点 `ActivitySource("PlcLibrary")`（见 `PlcActivity`），与指标对称——只埋不接，宿主接 OpenTelemetry 消费：
+- 只在池/管道边界记录，不在驱动热路径打 Info 日志
+- 指标标签保持低基数（设备/协议），不要放地址/TagId
+- 新增指标同步更新 README 表格
 
-| Span | 埋点位置 | 标签 |
-|------|---------|------|
-| `PlcLibrary.ReadAsync` | `DeviceDriverPool.ReadAsync` | device.id / device.protocol / point.count |
-| `PlcLibrary.WriteAsync` | `DeviceDriverPool.WriteAsync` | device.id / device.protocol / point.count |
-| `PlcLibrary.Acquire` | `DeviceSharedPool.AcquireAsync` | device.id / device.protocol |
-| `PlcLibrary.Dispatch` | `DriverResultPipeline.DispatchAsync` | device.id / tag.id / status |
-
-无监听器时开销可忽略；基础库不引用任何 OpenTelemetry 包。
-
-### 批量读设计
+## 批量读设计
 
 | 驱动 | 批量方式 | 失败策略 |
-|------|---------|---------|
-| Modbus | 连续地址合并 + PDU 上限切分（组级隔离） | 组失败 → 该组 Bad + 传输级置 Faulted |
+|---|---|---|
+| Modbus | 连续地址合并 + PDU 上限切分 | 组失败 → 该组 Bad；传输级置 Faulted |
 | S7 | `ReadMultipleVarsAsync` + 逐点回退 | 批量失败 → 逐点回退 |
-| AllenBradley | `ReadMultipleAsync` 原始字节 + CIP 小端解码 | 批量失败 → 逐点回退；string 始终逐点 |
-| BACnet | `ReadPropertyMultipleAsync` 按对象分组 | 整批失败 → 全部 Bad + 传输级置 Faulted |
-| Omron | **暂未启用**：底层 `BatchReadAsync` 已确认存在，但 FINS 字节序（CDAB）与 length 单位（字/字节）无法离线验证，且库内无公共转换助手——为避免静默数据错误（见 Modbus P0 修复先例），待接入真实 FINS 设备（或回环服务器实测）后启用 | - |
+| AllenBradley | `ReadMultipleAsync` 原始字节 + CIP 小端解码 | 批量失败 → 逐点回退；string 逐点 |
+| BACnet | `ReadPropertyMultipleAsync` 按对象分组 | 整批失败 → 全部 Bad；传输级置 Faulted |
+| Mitsubishi | 同设备/同类型连续地址合并为 Snet 数组读；字软元件 bool 按字数组 + 取位；位软元件逐点 | 组失败 → 该组 Bad；传输级置 Faulted |
+| Omron | 连续字合并为 `Read`、连续位合并为 `ReadBit`（空隙容忍 64 位，上限 480 字/256 位） | 组失败 → 该组 Bad；传输级置 Faulted |
 
-原则：**批量读不得引入数据正确性风险**；解码路径必须有可验证依据（Modbus 用 NModbus 返回数组、AB 用 CIP 小端规范、BACnet 用结构化结果），无法验证的字节序类优化宁可推迟。
+原则：批量读不得引入数据正确性风险。解码必须有可验证依据（NModbus 数组、CIP 小端规范、Snet 数组类型、FINS `Transform`）；无法验证的字节序优化宁可推迟。
 
-### 接入 OpenTelemetry
+## 测试策略
 
-```csharp
-// Program.cs
-builder.Services.AddOpenTelemetry()
-    .WithMetrics(m => m
-        .AddMeter("PlcLibrary")
-        .AddPrometheusExporter());
-```
-
-### 接入 dotnet-counters
+### 命令
 
 ```bash
-dotnet-counters monitor -n <进程名> --counters PlcLibrary
-```
-
-实时输出：
-
-```
-[PlcLibrary]
-    plc.reads.total (points)                    15420
-    plc.read.duration (s)
-        quantile=0.50                            0.012
-        quantile=0.95                            0.087
-        quantile=0.99                            0.310
-    plc.read.errors (errors)                        2
-    plc.acquire.duration (s)
-        quantile=0.50                            1.203
-```
-
-### 指标埋点位置
-
-| 指标 | 埋点位置 |
-|---|---|
-| `plc.reads.total` | `DeviceDriverPool.ReadAsync` — IO 重试成功后 |
-| `plc.read.duration` | `DeviceDriverPool.ReadAsync` — 含 IO 重试完整耗时 |
-| `plc.read.errors` | `DeviceDriverPool.ReadAsync` — catch 块，含重试耗尽 |
-| `plc.write.total` | `DeviceDriverPool.WriteAsync` |
-| `plc.acquire.duration` | `DeviceSharedPool.AcquireAsync` — 含 connect 耗时 |
-| `plc.pipeline.dispatched` | `DriverResultPipeline.DispatchAsync` |
-| `plc.pipeline.dropped` | `DriverResultPipeline.DispatchAsync` — 订阅通道 TryWrite 失败 |
-
-## 连接超时覆盖
-
-`DeviceConfiguration.ConnectionTimeout` 可覆盖全局 `PoolOptions.OperationTimeout`，在 `AcquireAsync` 获取驱动时优先使用设备级超时。默认 `00:00:05`；设为 `TimeSpan.Zero` 时使用全局配置。`DeviceSharedPool` 的 Polly 弹性管线也按设备独立创建，断路器回调通过 `ILogger` 输出状态变更（熔断/半开/恢复）。
-
-## 测试
-
-> 强制规则见 [AGENTS.md](./AGENTS.md)：**每次新增或任务完成后必须运行测试并全部通过**，构建必须 0 警告 0 错误。
-
-```bash
-# 全部测试
+dotnet build PlcLibrary.slnx -c Debug
 dotnet test PlcLibrary.Tests/PlcLibrary.Tests.csproj -c Debug
 
-# 只跑监控扩展包相关测试
-dotnet test PlcLibrary.Tests/PlcLibrary.Tests.csproj -c Debug --filter "FullyQualifiedName~PlcLibrary.Tests.Monitor"
+# 单协议
+dotnet test PlcLibrary.Tests/PlcLibrary.Tests.csproj -c Debug --filter "FullyQualifiedName~S7DriverSimulatorTests"
 ```
 
-### 可离线执行的测试（无硬件依赖）
+### 离线服务端
 
-| 测试文件 | 覆盖 |
+| 协议 | 服务端 | 位置 |
+|---|---|---|
+| Modbus TCP/UDP | NModbus 从站 | `Simulators/ModbusSlaveServer`（Monitor 测试内）/ 测试内联 |
+| S7 | 自建 S7comm 从站 | `Simulators/S7SimServer.cs` |
+| Omron FINS | `NewLife.Omron.FinsServer` | 测试内联 + `Simulators/FinsFrameCounterProxy.cs` |
+| Mitsubishi MC | 自建 MC 3E 从站 | `Simulators/McProtocolSimServer.cs` |
+| Allen-Bradley | 自建 EtherNet/IP+CIP 从站 | `Simulators/EtherNetIpSimServer.cs` |
+| BACnet/IP | `System.IO.BACnet.BacnetClient` 服务端模式 | `Simulators/BacnetSimServer.cs` |
+| OPC UA | `Opc.Ua.Server` 标准节点空间 | `Simulators/OpcUaTestServer.cs` |
+
+OPC UA 测试包 `OPCFoundation.NetStandard.Opc.Ua.Server` 为 **test-only**，生产包不引入服务端依赖。所有服务端使用动态端口、可 `IAsyncDisposable` 清理，测试可并行。
+
+### 覆盖重点
+
+- 连接/断开/重连、`Faulted` 与池重建
+- 批量请求次数、错误隔离、字节序/类型
+- 推送订阅回调、监控去重、管道背压
+- 调度 reconcile、监督重启、停机安全
+- 配置/池/管道的 Options 校验
+
+### 无法离线验证
+
+- 串口物理层（RTU/ASCII 帧）：需真实/虚拟串口对（com0com）
+- OPC UA 自定义 NodeManager 的可写节点语义
+- 真实 PLC 的字节序、位地址、厂商扩展（建议上线前真机联调）
+- 长时间浸泡/混沌（当前仅并发、背压、10k 管道压力用例）
+
+## 已知限制与技术债
+
+> 详细证据、严重度与复现见 [评估报告 §5](./docs/ASSESSMENT-2026-11.md#5-缺陷与风险清单)；以下为当前仍需注意的行为。
+
+| 项 | 现状 | 影响 |
+|---|---|---|
+| `PoolOptions.MaxRetryAttempts=0` | 通过 Options 校验，但首次下发设备时 Polly 抛校验异常 | 配置应始终 ≥ 1 |
+| S7 标量 `DataType` | 不参与解码，`DBD` 返回 `uint` | `REAL` 需自行按位转换 |
+| Mitsubishi 批量写 | 底层只返回整体结果 | 部分点失败时整批 Bad，重试需谨慎（非幂等） |
+| BACnet 读写超时 | `timeout` 仅用于 WhoIs 发现 | 读写依赖底层默认超时 |
+| 共享池配置 | 同连接串多设备共享池，按首个设备 `ConnectionTimeout` 创建 | 第二台设备的设备级超时被忽略 |
+| 连接串未知键 | 绑定器忽略未知键 | 拼写错误静默使用默认值 |
+| IO 级无熔断 | 坏设备每周期仍重试（指数退避） | 影响采集周期 |
+| OPC UA 订阅生命周期 | 停止时 Dispose 订阅，但未从 Session `RemoveSubscription`、KeepAlive 未解绑 | 热更新频繁切换可能累积 |
+| 连接串值含 `;` | 解析按 `;` 切分 | 密码含分号会截断 |
+| handler 同步阻塞 | `HandleAsync` 在返回 `ValueTask` 之前同步阻塞仍会占住管道消费者；`EnqueueTimeout` 只保护采集侧不挂起 | 这种 handler 应改为异步；否则数据会被丢弃而不是被处理 |
+| 驱动 Dispose/Disconnect 不响应 | 池等待有界（连接 5s、归还后台），超时后放弃等待 | 底层 socket 可能仍由运行库持有，直到其自身超时 |
+
+## 默认值与常量
+
+只隔离“可能变化 / 测试与生产可能不一致”的值；固定且只使用一次的标识直接写在原处，不为了统一而制造常量层。
+
+| 类型 | 做法 | 示例 |
+|---|---|---|
+| 配置默认值 | 直接写在各自的 `*DriverConfig` / `*Options` 属性上（只有多处共享时才用常量） | 端口、超时、host、PKI 路径、端点、默认 `CpuType`、池/管道/监控默认值；测试通过连接串/Options 覆盖 |
+| 单类算法常量 | 使用它的类内 `private const` | PDU/批量上限、订阅计数、清理/监督周期、通道容量、退避指数 |
+| 共享且会变化的标识 | `PlcMetrics.Meter`（名称 + 程序集版本） | `ActivitySource` 直接复用 `Meter.Name`/`Meter.Version`，不再单独维护常量类 |
+| 固定且单次使用 | 直接内联 | `[ProtocolDriverName("S7")]`、OPC UA 应用名/证书主题、Mitsubishi `protocoltype`、AB CIP 类型码（驱动内 private 方法） |
+
+| 项目 | 配置默认值位置 |
 |---|---|
-| `PlcLibrary.Tests/Monitor/PlcMonitorTests.cs` | 缓存读取/快照、复合键跨设备隔离、去重、质量变化、并发（1000 次同值只通知一次）、取消、TTL 淘汰 |
-| `PlcLibrary.Tests/Monitor/MonitorIntegrationTests.cs` | 宿主 DI 装配端到端、去重（不变值不重复推送） |
-| `PlcLibrary.Tests/Monitor/ModbusLoopbackIntegrationTests.cs` | 真实 Modbus TCP 回环（本机起 NModbus 从站）：单点变化、设备级订阅、多设备同地址隔离 |
-| `PlcLibrary.Tests/OpcUa/OpcUaDriverConfigurationTests.cs` | OPC UA 客户端证书存储配置离线校验（`ValidateAsync(ApplicationType.Client)`），无需真实服务端 |
-| `PlcLibrary.Tests/OpcUa/OpcUaDriverSubscriptionTests.cs` | OPC UA `Subscription`/`MonitoredItem` 构造重载回归（采样间隔、队列长度、`DiscardOldest`），无需真实服务端 |
-| `PlcLibrary.Tests/Drivers/DriverConfigConsumptionTests.cs` | 配置-消费闭环：每个 `*DriverConfig` 公共属性都被驱动源码引用 |
-| `PlcLibrary.Tests/Modbus/ModbusValueCodecTests.cs` | Modbus 16/32/64 位字节序、字符串 AB/BA/奇数长度/NUL 截断、编解码往返；配合 `ModbusBatchReadTests`/`ModbusBatchWriteTests` 覆盖多寄存器点位 |
+| `PlcLibrary` | `PoolOptions`、`PipelineOptions`、`MonitorOptions`、`DeviceConfiguration` |
+| `PlcLibrary.Modbus` | `ModbusDriverConfig` |
+| `PlcLibrary.S7` | `S7DriverConfig` |
+| `PlcLibrary.OpcUa` | `OpcUaDriverConfig` |
+| `PlcLibrary.Mitsubishi` | `MitsubishiDriverConfig` |
+| `PlcLibrary.Omron` | `OmronDriverConfig` |
+| `PlcLibrary.AllenBradley` | `AllenBradleyDriverConfig` |
+| `PlcLibrary.Bacnet` | `BacnetDriverConfig` |
 
-其余既有测试覆盖：驱动配置/批量读写、连接池弹性与回收、管道分发与背压、调度 reconcile、协议地址解析等（`dotnet test` 全量执行）。
+规则：
 
-### 无法离线执行的测试（需真实设备/服务端）
+- 协议名等固定契约直接写在 `[ProtocolDriverName(...)]`；只有两处以上共享且可能变化时才上提。
+- 测试与生产不一致的值（端口、超时、PKI 目录、端点）必须能通过连接串或 Options 覆盖，不写死在驱动逻辑里。
+- 配置默认值改动同步 README 对应表格；单类算法常量只改类内 `const`。
+- 新增共享常量放 `internal` 类型，避免固化为公开 API。
 
-- **S7 / OPC UA 真实回环**：S7 无官方服务端，OPC UA 起服务端较重——待接入真实设备后补充。
-- **背压极端场景**（订阅方极慢时的 latest-wins 行为）与 **eviction 定时器周期触发**：当前测试直接调用 `EvictStaleEntries()`，未覆盖 60s 定时器触发路径。
+## 文档维护约定
+
+- **README**：使用者视角（配置、API、行为）；不要写内部实现细节
+- **DEVELOPMENT**：架构、设计决策、测试策略、已知限制；实现变更同步更新
+- **AGENTS**：代理规则与仓库地图，不复制大段内容，只链接
+- **CHANGELOG**：每次发布记录新增/修复/不兼容变更；测试数量以实际运行结果为准
+- **ASSESSMENT**：带日期的快照，不随代码更新；新评估另建文件，旧文件保留并标注状态
+- 同一事实只写一处，其它文档链接过去；避免"当前/最新"等易过期措辞，改为具体版本或日期

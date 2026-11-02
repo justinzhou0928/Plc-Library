@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using NModbus;
 using NModbus.Serial;
 using PlcLibrary.DriverDomain.Attributes;
@@ -25,7 +25,20 @@ namespace PlcLibrary.Modbus
                 ReadTimeout = config.Timeout,
                 WriteTimeout = config.Timeout,
             };
-            return new ModbusFactory().CreateRtuMaster(serialPort);
+
+            // 立即打开串口：NModbus 的串口适配器是惰性打开的，若不在此处打开，
+            // 端口不存在/被占用只会在首次读写的 "The port is closed." 上暴露，
+            // 而该异常不属于传输级异常，驱动会一直停在 Connected（连接池不会重建）。
+            try
+            {
+                serialPort.Open();
+                return new ModbusFactory().CreateRtuMaster(serialPort);
+            }
+            catch
+            {
+                serialPort.Dispose();
+                throw;
+            }
         }
     }
 }

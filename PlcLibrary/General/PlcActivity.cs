@@ -8,6 +8,6 @@ namespace PlcLibrary.General
     /// </summary>
     internal static class PlcActivity
     {
-        internal static readonly ActivitySource Source = new("PlcLibrary", "1.2.0");
+        internal static readonly ActivitySource Source = new(PlcMetrics.Meter.Name, PlcMetrics.Meter.Version);
     }
 }

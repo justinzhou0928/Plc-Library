@@ -20,12 +20,16 @@ namespace PlcLibrary.Pipeline.Engine
 {
     internal sealed class DriverResultPipeline : IDataPipeline
     {
+
+        private const int SubscriberCapacity = 1000;
+
         private readonly IServiceProvider _sp;
         private readonly ILogger<DriverResultPipeline> _logger;
         private readonly Channel<DriverResult> _channel;
         private readonly ConcurrentDictionary<Guid, Channel<DriverResult>> _subscribers = new();
         private readonly int _maxHandlerParallelism;
         private readonly TimeSpan _handlerTimeout;
+        private readonly TimeSpan _enqueueTimeout;
         private IDataHandler[] _handlers = [];
 
         public DriverResultPipeline(
@@ -45,6 +49,7 @@ namespace PlcLibrary.Pipeline.Engine
             // 不持有可变的 ParallelOptions：分发时按次构造，避免并发 DispatchAsync 竞争 CancellationToken
             _maxHandlerParallelism = options.Value.MaxHandlerParallelism;
             _handlerTimeout = options.Value.HandlerTimeout;
+            _enqueueTimeout = options.Value.EnqueueTimeout;
         }
 
         public async Task ConsumeAsync(CancellationToken ct)
@@ -77,12 +82,33 @@ namespace PlcLibrary.Pipeline.Engine
         }
 
         public async ValueTask HandleAsync(DriverResult result, CancellationToken ct)
-            => await _channel.Writer.WriteAsync(result, ct).ConfigureAwait(false);
+        {
+            if (_channel.Writer.TryWrite(result)) return;
+
+            if (_enqueueTimeout <= TimeSpan.Zero)
+            {
+                await _channel.Writer.WriteAsync(result, ct).ConfigureAwait(false);
+                return;
+            }
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(_enqueueTimeout);
+            try
+            {
+                await _channel.Writer.WriteAsync(result, cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // 管道消费者长时间不前进（handler 阻塞等）：丢弃本点并继续采集，避免采集循环被永久反压。
+                PlcMetrics.PipelineDropped.Add(1, new TagList { { "device.id", result.DeviceId } });
+                PipelineLog.LogEnqueueTimedOut(_logger, result.Address, _enqueueTimeout);
+            }
+        }
 
         public async IAsyncEnumerable<DriverResult> ReadAsync(
             [EnumeratorCancellation] CancellationToken ct = default)
         {
-            var sub = Channel.CreateBounded<DriverResult>(new BoundedChannelOptions(1000)
+            var sub = Channel.CreateBounded<DriverResult>(new BoundedChannelOptions(SubscriberCapacity)
             {
                 FullMode = BoundedChannelFullMode.DropOldest,
                 SingleReader = true,
@@ -112,23 +138,29 @@ namespace PlcLibrary.Pipeline.Engine
 
             PlcMetrics.PipelineDispatched.Add(1, new TagList { { "device.id", result.DeviceId } });
             var handlers = _handlers;
-            if (handlers.Length > 0)
+            if (handlers.Length == 1)
             {
-                var parallelOptions = new ParallelOptions
+                // 常见路径（单 handler）：直接调用，避免 Parallel.ForEachAsync 与链接 CTS 的分配
+                await InvokeHandlerAsync(handlers[0], result, ct).ConfigureAwait(false);
+            }
+            else if (handlers.Length > 1)
+            {
+                if (_maxHandlerParallelism <= 1)
                 {
-                    MaxDegreeOfParallelism = _maxHandlerParallelism,
-                    CancellationToken = ct,
-                };
-                await Parallel.ForEachAsync(handlers, parallelOptions, async (handler, token) =>
+                    foreach (var handler in handlers)
+                        await InvokeHandlerAsync(handler, result, ct).ConfigureAwait(false);
+                }
+                else
                 {
-                    try
+                    var parallelOptions = new ParallelOptions
                     {
-                        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-                        linkedCts.CancelAfter(_handlerTimeout);
-                        await handler.HandleAsync(result, linkedCts.Token).ConfigureAwait(false);
-                    }
-                    catch (Exception ex) { PipelineLog.LogHandlerFailed(_logger, ex, handler.GetType().Name); }
-                }).ConfigureAwait(false);
+                        MaxDegreeOfParallelism = _maxHandlerParallelism,
+                        CancellationToken = ct,
+                    };
+                    await Parallel.ForEachAsync(handlers, parallelOptions,
+                        async (handler, _) => await InvokeHandlerAsync(handler, result, ct).ConfigureAwait(false))
+                        .ConfigureAwait(false);
+                }
             }
 
             if (!_subscribers.IsEmpty)
@@ -142,6 +174,62 @@ namespace PlcLibrary.Pipeline.Engine
                     }
                 }
             }
+        }
+
+        /// <summary>调用单个 IDataHandler，异常与超时互不影响其它 handler。</summary>
+        private async Task InvokeHandlerAsync(IDataHandler handler, DriverResult result, CancellationToken ct)
+        {
+            CancellationTokenSource? linked = null;
+            try
+            {
+                if (_handlerTimeout <= TimeSpan.Zero)
+                {
+                    await handler.HandleAsync(result, ct).ConfigureAwait(false);
+                    return;
+                }
+
+                linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                linked.CancelAfter(_handlerTimeout);
+                // WaitAsync 提供硬上限：即使 handler 忽略取消令牌，管道消费者也不会被永久卡住。
+                await handler.HandleAsync(result, linked.Token)
+                    .AsTask()
+                    .WaitAsync(_handlerTimeout, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException ex)
+            {
+                CancelQuietly(linked);
+                PipelineLog.LogHandlerFailed(_logger,
+                    new TimeoutException($"Handler '{handler.GetType().Name}' timed out after {_handlerTimeout.TotalSeconds}s.", ex),
+                    handler.GetType().Name);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Cancel 回调顺序可能让 WaitAsync 先完成；显式取消链接源，保证 handler 能观察到取消。
+                CancelQuietly(linked);
+                throw;
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                CancelQuietly(linked);
+                PipelineLog.LogHandlerFailed(_logger,
+                    new TimeoutException($"Handler '{handler.GetType().Name}' was cancelled after {_handlerTimeout.TotalSeconds}s."),
+                    handler.GetType().Name);
+            }
+            catch (Exception ex)
+            {
+                PipelineLog.LogHandlerFailed(_logger, ex, handler.GetType().Name);
+            }
+            finally
+            {
+                linked?.Dispose();
+            }
+        }
+
+        private static void CancelQuietly(CancellationTokenSource? cts)
+        {
+            try { cts?.Cancel(); }
+            catch { }
         }
     }
 }

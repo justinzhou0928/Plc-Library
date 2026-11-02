@@ -1,6 +1,55 @@
-# Changelog
+﻿# Changelog
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
+
+## [Unreleased]
+
+## [1.3.0] - 2026-11-02
+
+### 修复
+
+- **长期运行后采集卡死（现场问题）**：连接池的 IO/连接超时现在都有硬兜底（Polly 超时后再等 2s），底层调用忽略取消令牌时也会返回；超时驱动不再放回池，直接丢弃并释放槽位。修复 `Return` 与空闲回收并发时可能泄漏信号量/驱动的问题，以及驱动 `DisposeAsync` 卡住会拖住归还/清理的问题（改为有界释放 + 后台释放）
+- **采集器心跳与卡死重启**：`PollingCollector`/`PushCollector` 记录最后进展时间；轮询超过 `max(4×采集周期, 30s)`、推送 5 分钟无进展时，监督循环按退避重建执行器；`TaskActuator.StopAsync` 有界等待，循环不响应取消时强制释放采集器并放弃旧循环，避免监督/停机永久等待
+- **管道/处理器卡死**：handler 超时改为硬上限（忽略取消也不会卡住分发）；`PipelineOptions.EnqueueTimeout`（默认 5s）限制写入队列的等待，消费者不前进时丢弃该点并计入 `plc.pipeline.dropped`，采集循环不会被反压永久卡住
+- **监督循环自愈**：单次监督异常不再导致监督循环退出；健康状态会把“运行但无进展”的设备报为 `Faulted`
+- **AllenBradley 批量读静默错值（严重）**：`TagClient.ReadMultipleAsync` 返回的每个嵌入式 Read Tag 应答以 2 字节 CIP 数据类型码开头，`AllenBradleyDriver.TryDecodeCipValue` 原先从第 0 字节开始解码，导致 DINT/REAL 整体错位、BOOL 恒为 `true`，且质量仍为 `Good`。现改为跳过并校验 2 字节类型码（BOOL/SINT/INT/DINT/LINT/USINT/UINT/UDINT/ULINT/REAL/LREAL），类型不匹配时返回 `BadCommFailure` 而不是解出垃圾值
+- **Mitsubishi 响应键串点（严重）**：Snet 结果字典以 `AddressName` 为键，原实现先按 `TagId` 查找，TagId 与另一点位地址同名时会返回**另一个点位**的值（`Good`）。现优先按 `Address` 命中，仅在没有任何点位把 `TagId` 当作地址时才回退到 `TagId`；同时修复 TagId 与 Address 仅大小写不同时误报 `Point not found in response`
+- **BACnet 逐对象错误与响应缺项被当成 Good（严重）**：RMP-ACK 中逐对象的 `BacnetError` 现在降级为 `BadCommFailure`；响应省略某个请求对象时不再返回数组默认值（`Status=Good`、`Address/Value=null`），而是返回带地址的 `BadCommFailure("No response for object")`
+- **BACnet 远端端口被忽略**：`BacnetAddress(IP, address, network)` 的第三个参数是网络号而非端口，原实现把 `port` 传进去导致远端永远连 47808。现把端口编码进地址字符串（`ip:port`），并补齐非标准端口回归测试
+- **BACnet 写/读的参数错位**：`WritePropertyAsync` 的参数顺序是 `invokeId, priority, arrayIndex, ct`，原实现把配置的 `timeout` 当作 `arrayIndex` 发送；`ReadPropertyMultiple` 也显式传了 array index 0。现统一使用 `BACNET_ARRAY_ALL (0xFFFFFFFF)`
+- **推送设备连接失败后永久僵死、且拖垮宿主停机（高危）**：`TaskActuator` 现在捕获全部异常并记录 `LastError`，`StopAsync` 不再向上抛；`TaskScheduler` 新增监督循环（默认 5s），对已停止的执行器按指数退避（50ms→60s）重建采集器与驱动；`TaskSchedulerHost.StopAsync` 先取消监督循环再停止执行器
+- **串口 Modbus 端口打不开时驱动长期停在 Connected**：`ModbusRtuDriver`/`ModbusAsciiDriver` 在 `ConnectAsync` 阶段即打开串口，端口不存在/被占用会立即失败并置 `Faulted`，连接池据此重建，而不是复用永远失败的连接
+- **Mitsubishi 字软元件 bool 访问落到错误位**：Snet 对 `D110` + bool 发 MC 位写命令（head=110，按规范等价 `D6.14`），读取则按整字转换。驱动层现在统一「读字 + 取 bit」，写入补全为 `D110.<bit>` 走读改写（read-modify-write）；位号 0–15 之外返回 `BadConfigError`
+- **AB `timeout` 配置不生效**：`AllenBradleyDriver` 现在为 Connect/Read/Write 的每次会话操作套上配置的 `timeout`，超时转换为 `TimeoutException`（传输级）并置 `Faulted`；对端"接受连接但不响应"不再无限等待
+- **未知 `DataType` 静默回退 `int`**：Allen-Bradley / Omron / Mitsubishi 改用 `DataTypeMapper.TryResolve`，未知类型返回 `BadConfigError`（不再按 Int32 误读）
+- **池回收与并发借用竞态**：`DeviceSharedPool` 增加原子「回收中」标记 + `PoolRecycledException`，`DeviceDriverPool.AcquireAsync` 捕获后重新取池重试；清理线程不会在借用期间销毁信号量/驱动队列
+- **S7 批量写回退可能重复写**：先逐点构造 `DataItem`（非法地址只标 `BadConfigError`，不进入批量）；单点非 string 直接逐点写；批量失败时传输级故障不再逐点重写，仅协议/数据级失败才逐点隔离（绝对值写入幂等）
+
+### 变更（不兼容）
+
+- **Mitsubishi `D`/`W`/`R`/`ZR` 上的 bool 点位语义变化**：`D110 + DataType=bool` 现在等价 `D110.0`（bit 0），读写都按 bit 语义；1.2 及以前由底层库按整字处理，读写语义不一致且写会落到错误位。需要整字真值判断请改用 `DataType=ushort` 并自行比较。升级前请检查现有 Mitsubishi 布尔点位配置
+
+### 性能与精简
+
+- **Omron FINS 批量读**：同存储区连续字合并为一次 `Read`、连续位合并为一次 `ReadBit`（空隙容忍 64 位，单请求上限 480 字/256 位），按组隔离错误；8 个点位由 8 次请求降为 2 次
+- **Mitsubishi 批量读**：同设备/同类型连续地址合并为一次 Snet 数组读（`Int16Array`/`UInt16Array`/`Int32Array`/`FloatArray`/`Int64Array`/`DoubleArray`），5 个连续 short 由 5 次请求降为 1 次；字软元件 bool 按字数组读 + 取位，位软元件逐点
+- **Modbus TCP 异步连接**：`ModbusDriverBase` 新增异步工厂重载（保留原同步重载以兼容既有子类）；TCP 在 `ConnectAsync` 中异步连接并由 `timeout` 约束，不再阻塞线程池线程等待系统默认超时
+- **管道分发快路径**：单 `IDataHandler`（最常见）直接调用，去掉每点位 `Parallel.ForEachAsync` + 链接 `CancellationTokenSource` 的分配；handler 超时与异常隔离语义不变
+- **监控缓存无锁化**：`PlcMonitor` 由「结果 + 最后活跃时间」两个字典 + 全局锁改为单字典 + CAS 循环，内存减半、去掉全局锁竞争；淘汰仍用值匹配删除，避免误删并发更新
+- **移除弹性管线全局注册表**：`ManagedResiliencePipelineRegistry` / `ResiliencePipelineKeys` 删除，管线由 `DeviceSharedPool`/`PushCollector` 自持，消除跨设备可变全局状态与热更新漏删风险（`Controller` 不再依赖 `DriverPool.Engine` 内部类型）
+- **池清理改用 `PeriodicTimer`**：`DeviceDriverPool` 不再使用 `System.Threading.Timer` 与"发射后不管"的任务；清理异常按周期记录并重试，停机时等待清理循环退出
+- **Modbus 编解码改用 BCL `TypeCode`**：删除自定义 `ModbusValueKind`，`TryGetKind` 直接返回 `Type.GetTypeCode(type)`（仍是 `TypeCode` 子集）；字长/编解码逻辑与拒绝 `byte`/`sbyte` 的行为不变
+- **常量策略收敛**：不再为协议名等固定且单次使用的值建常量类（`[ProtocolDriverName("S7")]` 等直接内联）；配置默认值留在各自 `*DriverConfig`/`*Options`；单类算法常量用类内 `private const`；Meter/ActivitySource 标识统一由 `PlcMetrics.Meter` 提供（`ActivitySource` 复用其 `Name`/`Version`），不再保留独立常量类。默认值与行为不变
+
+### 测试
+
+- 新增多套离线协议服务端与端到端测试，覆盖 Modbus TCP/UDP/串口失败路径、S7、Omron FINS、Mitsubishi MC 3E、Allen-Bradley EtherNet/IP+CIP、BACnet/IP、OPC UA 真实服务端数据面（会话/读/订阅）；另补充推送驱动失败与监督重启、`PoolOptions` 与 Polly 约束一致性、池回收竞态、AB 超时回归
+- 新增池/管道/采集器稳定性用例：驱动/连接/释放忽略取消时的硬超时与槽位恢复、回收与归还并发、handler 忽略取消、队列写入超时、执行器卡死停止，以及带周期传输故障的加速浸泡；全量测试在本次变更后通过（以 `dotnet test` 输出为准）
+
+### 文档
+
+- `README.md`：补充 Mitsubishi 字软元件 bool 语义（不兼容说明）、BACnet 远端端口、采集任务监督、Modbus TCP 异步连接、批量读能力表（Omron/Mitsubishi 已支持批量）
+- `DEVELOPMENT.md` / `AGENTS.md`：更新池生命周期（管线自持、PeriodicTimer、回收竞态）、采集任务监督、批量读设计、离线测试矩阵与「无法离线验证」范围
 
 ## [1.2.0] - 2026-10-21
 

@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using NModbus;
 using NModbus.Serial;
 using PlcLibrary.DriverDomain.Attributes;
@@ -25,7 +25,18 @@ namespace PlcLibrary.Modbus
                 ReadTimeout = config.Timeout,
                 WriteTimeout = config.Timeout,
             };
-            return new ModbusFactory().CreateAsciiMaster(serialPort);
+
+            // 立即打开串口：理由同 ModbusRtuDriver，避免惰性打开导致驱动长期停在 Connected。
+            try
+            {
+                serialPort.Open();
+                return new ModbusFactory().CreateAsciiMaster(serialPort);
+            }
+            catch
+            {
+                serialPort.Dispose();
+                throw;
+            }
         }
     }
 }

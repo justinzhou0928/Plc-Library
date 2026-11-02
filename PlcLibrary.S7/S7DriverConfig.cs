@@ -1,4 +1,4 @@
-﻿using PlcLibrary.DriverDomain.Parser;
+using PlcLibrary.DriverDomain.Parser;
 using S7.Net;
 using System;
 

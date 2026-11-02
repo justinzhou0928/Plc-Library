@@ -23,7 +23,7 @@ namespace PlcLibrary.OpcUa
         public int PublishingInterval { get; init; } = 1000;
 
         /// <summary>会话超时（毫秒）。</summary>
-        public int SessionTimeout { get; init; } = 60000;
+        public int SessionTimeout { get; init; } = 60_000;
 
         /// <summary>是否自动接受不受信任的服务端证书。</summary>
         public bool AutoAcceptCertificate { get; init; } = false;

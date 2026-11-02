@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using PlcLibrary.DriverDomain.Enums;
@@ -12,7 +12,6 @@ namespace PlcLibrary.Tests.DriverPool;
 public class DeviceSharedPoolTests
 {
     private readonly ILogger<DeviceSharedPool> _logger = NullLogger<DeviceSharedPool>.Instance;
-    private readonly ManagedResiliencePipelineRegistry _registry = new();
     private readonly Mock<IDriverFactory> _factory = new();
     private readonly PoolOptions _options = new() { MaxConnectionsPerDevice = 2, OperationTimeout = TimeSpan.FromSeconds(5) };
     private readonly DeviceConfiguration _device = new()
@@ -144,6 +143,27 @@ public class DeviceSharedPoolTests
         Assert.False(pool.IsIdleBeyond(TimeSpan.FromSeconds(1)));
     }
 
+    [Fact]
+    public async Task AcquireAsync_WhileRecycling_ThrowsPoolRecycled_AndRecoversAfterCancel()
+    {
+        var driver = new Mock<IProtocolDriver>();
+        driver.Setup(d => d.DriverStatus).Returns(DriverStatus.Connected);
+        _factory.Setup(f => f.CreateAsync(_device, It.IsAny<CancellationToken>())).ReturnsAsync(driver.Object);
+
+        var pool = CreatePool();
+        Assert.True(pool.TryBeginRecycle());
+
+        // 回收中禁止借用：上层（DeviceDriverPool）据此重新取池，而不是撞上即将释放的信号量
+        await Assert.ThrowsAsync<PoolRecycledException>(
+            async () => await pool.AcquireAsync(CancellationToken.None));
+
+        pool.CancelRecycle();
+        var acquired = await pool.AcquireAsync(CancellationToken.None);
+        Assert.NotNull(acquired);
+        pool.Return(acquired);
+        await pool.DisposeAsync();
+    }
+
     private DeviceSharedPool CreatePool()
-        => new(_logger, _device, _factory.Object, _options, _registry);
+        => new(_logger, _device, _factory.Object, _options);
 }

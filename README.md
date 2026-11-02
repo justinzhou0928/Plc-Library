@@ -1,30 +1,44 @@
-# PlcLibrary
+﻿# PlcLibrary
 
-PLC 数据采集库，提供连接池管理、定时采集调度、数据分发管道。
+工业 PLC 数据采集库：连接池、热更新调度、数据管道、实时值监控与可观测性，一个宿主进程接入多种协议。
 
-- 协议无关驱动接口，一行注册新协议
-- 连接池 + Polly 弹性策略（重试、超时、断路器），**每设备独立隔离**，覆盖连接和 IO 两级
-- 设备配置热更新，差量 reconcile
-- Channel 管道 fan-out 到多个 `IDataHandler`
-- 主动读写 + 自动采集双模式
-- `System.Diagnostics.Metrics` 内置可观测性，0 依赖接入 Prometheus / Grafana
+- 协议无关驱动接口：新增协议只需实现 `IProtocolDriver` + `AddDriver<T>()`
+- 连接池 + Polly 弹性策略（连接级重试/超时/熔断；IO 级重试/超时）
+- 设备配置热更新，差量 reconcile；推送型设备失败自动重建
+- Channel 管道 fan-out 到多个 `IDataHandler`，支持背压与 handler 超时
+- 主动读写 + 自动采集双模式；`PlcLibrary.Monitor` 提供变化订阅缓存
+- `System.Diagnostics.Metrics` + `ActivitySource`，通过 OpenTelemetry 接入 Prometheus/Grafana
+
+## 文档地图
+
+| 文档 | 面向 | 内容 |
+|---|---|---|
+| **README.md**（本文） | 使用者 | 安装、配置、驱动能力、API、监控与可观测性 |
+| [DEVELOPMENT.md](./DEVELOPMENT.md) | 贡献者 | 架构、运行时、驱动开发、批量读设计、测试策略、已知限制 |
+| [AGENTS.md](./AGENTS.md) | AI 代理/贡献者 | 强制规则、命令、仓库地图、文档维护约定 |
+| [CHANGELOG.md](./CHANGELOG.md) | 使用者 | 版本历史与不兼容变更 |
+| [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md) | 评审者 | 2026-11 工业级评估快照（含验证矩阵与未修复项） |
+
+> 行为与配置以 README/DEVELOPMENT 为准；评估报告是**带日期的快照**，其中的"待处理"项可能已经变化。
 
 ## 支持的驱动
 
-| 驱动 | `Protocol` 值 | 协议 | 状态 |
-|------|---------------|------|------|
-| `S7Driver` | `S7` | Siemens S7 (S7-200/300/400/1200/1500) | 可用 |
-| `ModbusTcpDriver` | `Modbus_TCP` | Modbus TCP | 可用 |
-| `ModbusUdpDriver` | `Modbus_UDP` | Modbus UDP | 可用 |
-| `OpcUaDriver` | `OPC_UA` | OPC UA | 可用 |
-| `MitsubishiDriver` | `Mitsubishi` | Mitsubishi MC / A1E / FX | 可用 |
-| `OmronDriver` | `Omron_FINS` | Omron FINS TCP | 可用 |
-| `AllenBradleyDriver` | `AllenBradley` | Allen-Bradley Logix Tag (CIP/EtherNet/IP) | 可用 |
-| `BacnetDriver` | `BACnet` | BACnet/IP | 可用 |
-| `ModbusRtuDriver` | `Modbus_RTU` | Modbus RTU | 可用 |
-| `ModbusAsciiDriver` | `Modbus_ASCII` | Modbus ASCII | 可用 |
+| 驱动 | `Protocol` 值 | 协议 | 批量读 |
+|------|---------------|------|:--:|
+| `S7Driver` | `S7` | Siemens S7（S7-200/300/400/1200/1500） | ✅ |
+| `ModbusTcpDriver` | `Modbus_TCP` | Modbus TCP | ✅ |
+| `ModbusUdpDriver` | `Modbus_UDP` | Modbus UDP | ✅ |
+| `ModbusRtuDriver` | `Modbus_RTU` | Modbus RTU（串口） | ✅ |
+| `ModbusAsciiDriver` | `Modbus_ASCII` | Modbus ASCII（串口） | ✅ |
+| `OpcUaDriver` | `OPC_UA` | OPC UA（客户端 + 订阅推送） | ✅ |
+| `MitsubishiDriver` | `Mitsubishi` | Mitsubishi MC / A1E / A3C / FX | ✅ |
+| `OmronDriver` | `Omron_FINS` | Omron FINS/TCP | ✅ |
+| `AllenBradleyDriver` | `AllenBradley` | Allen-Bradley Logix Tag（CIP/EtherNet/IP） | ✅ |
+| `BacnetDriver` | `BACnet` | BACnet/IP | ✅ |
 
-> `DeviceConfiguration.Protocol` 必须与驱动上的 `[ProtocolDriverName]` **完全一致（区分大小写）**，调度器按字符串精确匹配。写成 `"OPC UA"`、`"OpcUa"` 等别名不会抛异常，但该设备会被跳过并记录 `LogProtocolUnregistered` 错误日志。
+> `DeviceConfiguration.Protocol` 必须与驱动上的 `[ProtocolDriverName]` **完全一致（区分大小写）**。写成 `"OPC UA"`/`"OpcUa"` 不会抛异常，该设备会被跳过并记录 `LogProtocolUnregistered`。
+>
+> 各驱动的离线验证等级与未覆盖项见 [评估报告](./docs/ASSESSMENT-2026-11.md#4-驱动完整性验证矩阵)。
 
 ## 安装
 
@@ -48,6 +62,8 @@ dotnet add package PlcLibrary.Monitor
 ## 快速开始
 
 ```csharp
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using PlcLibrary.Controller.Interfaces;
 using PlcLibrary.DriverDomain.Models;
@@ -66,11 +82,11 @@ var devices = new[]
         Name = "1号线",
         Protocol = "S7",
         ConnectionString = "host:10.38.103.107;port:102;timeout:3000;rack:0;slot:0;cpu:S71200;",
-        TagPoints = new[]
-        {
-            new TagPointConfiguration { TagId = "t1", Address = "DB21.DBX10.2", DataType = "System.Boolean" },
-            new TagPointConfiguration { TagId = "t2", Address = "DB21.DBX10.0", DataType = "System.Boolean" },
-        },
+        TagPoints =
+        [
+            new TagPointConfiguration { TagId = "t1", Address = "DB21.DBX10.2" },
+            new TagPointConfiguration { TagId = "t2", Address = "DB21.DBX10.0" },
+        ],
         CollectionInterval = TimeSpan.FromSeconds(1),
     },
 };
@@ -95,9 +111,7 @@ internal sealed class ConsoleHandler(ILogger<ConsoleHandler> logger) : IDataHand
 }
 ```
 
-> 设备多时可用 `BackgroundService` + `IConfiguration` 从 appsettings.json 读取，参考下文 JSON 配置方式。
-
-### 使用 JSON 配置
+### 从 appsettings.json 加载设备
 
 ```csharp
 builder.Services.AddPlcLibrary();
@@ -115,8 +129,8 @@ builder.Services.Configure<PipelineOptions>(builder.Configuration.GetSection("Pi
       "ConnectionString": "host:192.168.1.1;port:102;rack:0;slot:1;cpu:S71200",
       "CollectionInterval": "00:00:01",
       "TagPoints": [
-        { "TagId": "temp", "Address": "DB1.DBD0", "DataType": "Real" },
-        { "TagId": "pressure", "Address": "DB1.DBD4", "DataType": "Real" }
+        { "TagId": "temp", "Address": "DB1.DBW0" },
+        { "TagId": "pressure", "Address": "DB1.DBW2" }
       ]
     }
   ]
@@ -135,11 +149,39 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 }
 ```
 
-## 连接字符串
+## 设备与点位配置
 
-格式 `key:value;key:value`，大小写不敏感。
+### `DeviceConfiguration`
 
-**S7**
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `Id` | 必填 | 设备唯一标识，参与监控缓存键 |
+| `Name` | - | 显示名 |
+| `Protocol` | 必填 | 与 `[ProtocolDriverName]` 精确匹配 |
+| `ConnectionString` | 必填 | `key:value;key:value`，大小写不敏感 |
+| `ConnectionTimeout` | `00:00:05` | 获取驱动（连接池借用）的超时；`00:00:00` 用全局 `OperationTimeout` |
+| `CollectionInterval` | `00:00:01` | 轮询周期；推送驱动（OPC UA）无效 |
+| `TagPoints` | 空 | 点位列表，`TagId` 必须唯一 |
+| `Enabled` | `true` | 为 `false` 时跳过 |
+
+### `TagPointConfiguration`
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `TagId` | 必填 | 点位唯一标识（设备内唯一） |
+| `Name` | - | 显示名 |
+| `Address` | 必填 | 协议地址（见各驱动章节） |
+| `DataType` | 空 | 数据类型，空值语义由驱动决定（见下文） |
+| `Length` | 0 | 字符串字节长度，仅 `DataType=string` |
+| `ByteOrder` | 空 | 多字节字节序，主要供 Modbus 使用（`AB`/`BA`/`ABCD`/`CDAB`/…） |
+| `SamplingInterval` | 0 | OPC UA 订阅采样间隔（ms），0 用发布间隔 |
+| `QueueSize` | 1 | OPC UA 订阅队列长度 |
+
+### 连接字符串
+
+格式 `key:value;key:value`，大小写不敏感。未知键会被忽略（拼写错误不会报错，需自行核对）。
+
+#### S7
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
@@ -147,334 +189,188 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 | port | 102 | 端口 |
 | rack | 0 | 机架 |
 | slot | 0 | 插槽 |
-| timeout | 3000 | 超时 (ms) |
-| cpu | S71200 | CpuType |
+| timeout | 3000 | 读写超时 (ms) |
+| cpu | S71200 | `CpuType`（S7200/S7300/S7400/S71200/S71500/...） |
 
 示例：`host:192.168.1.1;port:102;rack:0;slot:1;cpu:S71500`
 
-地址格式：S7 标准地址（`DB21.DBX10.2`、`DB1.DBD0`、`M10.0`、`I1.0`、`Q2.0`、`T5`、`C10` 等），标量类型由地址推断，无需 `DataType`。
+地址为 S7 标准地址（`DB21.DBX10.2`、`DB1.DBD0`、`M10.0`、`I1.0`、`Q2.0`、`T5`、`C10` 等）。**标量类型由地址推断，`DataType` 不参与**：`DBX`→bool、`DBB`→byte、`DBW`→ushort、`DBD`→uint（`REAL` 也会返回 `uint` 位模式，需要 `float` 时请自行 `BitConverter.UInt32BitsToSingle`）。
 
-**字符串读取**：S7 STRING 在 PLC 中占 `2 字节头（maxLen/curLen）+ 数据`，读取时地址必须**带长度**（s7netplus 的 `DataItem.FromAddress` 不解析长度后缀）：
+S7 STRING 必须带长度：`DB6000.DBB504.100` 读 DB6000 从字节 504 起的 STRING(100)，2 字节头自动解析。配置 `DataType:"string"` 但地址无长度会返回配置错误。
 
-| 地址 | 说明 |
-|------|------|
-| `DB6000.DBB504.100` | 读 DB6000 从字节 504 起的 S7 STRING(100)，2 字节头自动解析 |
+> S7 字符串默认 ASCII；含中文时在宿主启动时设置 `S7.Net.Types.S7String.StringEncoding = Encoding.UTF8;`。
 
-```json
-{ "TagId": "name", "Address": "DB6000.DBB504.100" }
-```
-
-> 编码：S7 字符串默认按 ASCII 解码（s7netplus 的 `S7String.StringEncoding`），含中文时请在宿主启动时设置为 UTF-8：
-> `S7.Net.Types.S7String.StringEncoding = Encoding.UTF8;`
-> 若配置了 `DataType: "string"` 但地址未带长度，驱动会返回配置错误（防止静默读错）。
-
-**Modbus TCP / UDP**
+#### Modbus TCP / UDP
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | host | 127.0.0.1 | 设备地址 |
 | port | 502 | 端口 |
 | slaveid | 1 | 从站 ID |
-| timeout | 3000 | 超时 (ms) |
-| byteorder | - | 设备级默认字节序（AB/BA/ABCD/CDAB/...），点位级可覆盖 |
+| timeout | 3000 | 连接 + 收发超时 (ms) |
+| byteorder | - | 设备级默认字节序，点位级可覆盖 |
 
 示例：`host:10.0.0.1;port:502;slaveid:2`
 
-**Modbus 地址格式**：`前缀 + 1-based 十进制地址`（前缀标记数据类型，地址范围 1 ~ 65536，超出或前缀不符视为配置错误）：
+> TCP 在 `ConnectAsync` 中**异步建立**，`timeout` 约束连接与单次收发；失败/超时立即置 `Faulted` 由池重建。
 
-| 前缀 | 类型 | 读写 | 示例 | 说明 |
-|------|------|:--:|------|------|
-| `0xxxx` | Coil | 读写 | `00001` | 线圈，布尔量 |
-| `1xxxx` | Discrete Input | 只读 | `10042` | 离散输入，布尔量 |
-| `3xxxx` | Input Register | 只读 | `30001` | 输入寄存器，16 位无符号整数 |
-| `4xxxx` | Holding Register | 读写 | `40042` | 保持寄存器，16 位无符号整数 |
+#### Modbus RTU / ASCII（串口）
 
-地址为 **1-based**（PLC 习惯），驱动内部自动转换为 0-based 偏移。连续/相邻地址自动合并为单次批量读写，并按 Modbus PDU 上限自动切分（读寄存器 ≤125、线圈/离散输入 ≤2000；写寄存器 ≤123、线圈 ≤1968）；读路径允许重叠点位从同一缓冲区解码，写路径遇到重叠点位返回 `BadConfigError`。
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| host | - | 串口号（如 `COM3`） |
+| baudrate | 9600 | 波特率 |
+| parity | None | None/Odd/Even/Mark/Space |
+| databits | 8 | 数据位 |
+| stopbits | One | One/OnePointFive/Two |
+| timeout | 3000 | 超时 (ms) |
+| slaveid | 1 | 从站 ID |
+| byteorder | - | 设备级默认字节序 |
 
-**Modbus 多寄存器数据（string / 32 位 / 64 位）**
+示例：`host:COM3;baudrate:19200;parity:Even;stopbits:One;slaveid:1`
 
-`DataType` 配合 `Length`、`ByteOrder` 可让驱动一次读出整条字符串或多个寄存器组成的数值：
+串口在 `ConnectAsync` 阶段打开；端口不存在/被占用会立即失败并置 `Faulted`。
+
+#### Modbus 地址格式
+
+`前缀 + 1-based 十进制地址`（1 ~ 65536）：
+
+| 前缀 | 类型 | 读写 | 示例 |
+|------|------|:--:|------|
+| `0xxxx` | Coil | 读写 | `00001` |
+| `1xxxx` | Discrete Input | 只读 | `10042` |
+| `3xxxx` | Input Register | 只读 | `30001` |
+| `4xxxx` | Holding Register | 读写 | `40042` |
+
+连续/相邻地址自动合并为单次请求，并按 PDU 上限切分（读寄存器 ≤125、线圈/离散输入 ≤2000；写寄存器 ≤123、线圈 ≤1968）。读允许重叠点位共享缓冲区，写遇重叠返回 `BadConfigError`。
+
+`DataType` + `Length` + `ByteOrder` 支持多寄存器值：
 
 ```csharp
 new TagPointConfiguration
 {
     TagId = "barcode",
-    Address = "42251",      // 12 个保持寄存器
+    Address = "42251",
     DataType = "string",
-    Length = 24,            // 字节数（ASCII 下等于字符数）；寄存器数 = ceil(24 / 2) = 12
-    ByteOrder = "AB",       // 默认 AB（寄存器高字节在前）
+    Length = 24,          // 字节数（ASCII 下等于字符数），寄存器数 = ceil(24/2) = 12
+    ByteOrder = "AB",
 }
 
 new TagPointConfiguration
 {
     TagId = "temp",
-    Address = "42263",      // 紧邻条码的 2 个寄存器
+    Address = "42263",
     DataType = "float",
-    ByteOrder = "CDAB",     // 字交换；42251~42264 会合并成一次请求
+    ByteOrder = "CDAB",   // 42251~42264 会合并为一次请求
 }
 ```
 
-- 每个点位只产出一条 `DriverResult`，`Value` 为解析后的 `string`/`float`/`int`/...；
-- 不写 `DataType` 时保持原有行为：每个寄存器一条 `ushort`；
-- `string` 必须配置 `Length`；`Length` 是**字节数**（ASCII 下等于字符数），不是寄存器数；首个 `\0` 截断；
-- 单次请求寄存器上限：读 125、写 123；因此字符串读最多 250 字节、写最多 246 字节，超长返回 `BadConfigError`，不会静默截断；
-- `ByteOrder` 为空时使用连接串的 `byteorder`，仍为空则 `AB`；点位级优先；
-- 支持 `bool`/`short`/`ushort`/`int`/`uint`/`long`/`ulong`/`float`/`double`/`string`，以及 `int32`/`real`/`dint` 等别名。
+- 每个点位只产出一条 `DriverResult`；不写 `DataType` 时逐寄存器返回 `ushort`
+- `string` 必须配置 `Length`，首个 `\0` 截断；单次请求最多读 250/写 246 字节，超长返回 `BadConfigError`
+- `ByteOrder` 点位级优先，其次连接串 `byteorder`，默认 `AB`
 
-**ByteOrder 取值**
-
-| 类型宽度 | 常用值 | 说明 |
-|---|---|---|
-| 16 位 | `AB`（默认）/ `BA` | `AB` 高字节在前；`BA` 字节交换 |
-| 32 位 | `ABCD` / `CDAB` / `BADC` / `DCBA` | 大端 / 字交换 / 字节交换 / 全反 |
-| 64 位 | `ABCDEFGH` / `GHEFCDAB` / `BADCFEHG` / `HGFEDCBA` | 8 字节排列，支持任意合法排列 |
-| 字符串 | `AB`（默认）/ `BA` | 每寄存器内高/低字节顺序 |
-
-**Modbus RTU / ASCII**（串口）
+#### OPC UA
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| host | - | 串口号（COM3） |
-| baudrate | 9600 | 波特率 |
-| parity | None | 校验（None/Odd/Even/Mark/Space） |
-| databits | 8 | 数据位 |
-| stopbits | One | 停止位（One/OnePointFive/Two） |
-| timeout | 3000 | 超时 (ms) |
-| slaveid | 1 | 从站 ID |
-| byteorder | - | 设备级默认字节序（同 Modbus TCP） |
-
-示例：`host:COM3;baudrate:19200;parity:Even;stopbits:One;slaveid:1`
-
-> 串口传输基于 [NModbus.Serial](https://www.nuget.org/packages/NModbus.Serial)（与 NModbus 主包同版本发布），`Parity`/`StopBits` 字符串大小写不敏感。
-
-**OPC UA**
-
-| 字段 | 默认值 | 说明 |
-|------|--------|------|
-| endpoint | opc.tcp://localhost:4840 | 服务器端点 |
-| username | - | 用户名（可选） |
-| password | - | 密码（可选） |
-| security | None | None / Sign / SignAndEncrypt（端点实际安全模式低于配置时连接失败，不静默降级） |
-| timeout | 5000 | 超时 (ms) |
+| endpoint | `opc.tcp://localhost:4840` | 服务端端点 |
+| username / password | - | 用户名/密码（空则匿名） |
+| security | None | None / Sign / SignAndEncrypt；端点实际安全模式低于配置时连接失败，不静默降级 |
+| timeout | 5000 | 操作超时 (ms) |
 | publishinginterval | 1000 | 订阅发布间隔 (ms) |
 | sessiontimeout | 60000 | 会话超时 (ms) |
-| autoacceptcertificate | false | 自动接受证书（生产环境应设为 false） |
-| pkiownpath | PlcLibrary.OpcUa/pki/own | 应用证书存储目录 |
-| pkitrustedpath | PlcLibrary.OpcUa/pki/trusted | 受信任对端证书存储目录 |
-| pkiissuerpath | PlcLibrary.OpcUa/pki/issuer | 受信任颁发者证书存储目录（必填，不能为空） |
-| pkirejectedpath | PlcLibrary.OpcUa/pki/rejected | 被拒绝证书存储目录 |
+| autoacceptcertificate | false | 自动接受证书（生产应为 false） |
+| pkiownpath | `PlcLibrary.OpcUa/pki/own` | 应用证书目录 |
+| pkitrustedpath | `PlcLibrary.OpcUa/pki/trusted` | 受信任对端证书目录 |
+| pkiissuerpath | `PlcLibrary.OpcUa/pki/issuer` | 受信任颁发者目录（必填，不能为空） |
+| pkirejectedpath | `PlcLibrary.OpcUa/pki/rejected` | 被拒绝证书目录 |
 
 示例：`endpoint:opc.tcp://10.0.0.1:4840;security:None;timeout:10000`
 
-> OPC UA 客户端在建立连接前会校验 `ApplicationCertificate`、`TrustedPeerCertificates`、`TrustedIssuerCertificates` 三项存储配置。即使使用 `security:None` + 匿名登录，`pkiissuerpath` 也不能为空，否则连接阶段直接抛 `BadConfigurationError`（`TrustedIssuerCertificates StorePath must be specified.`），与服务器是否可达无关。四个 PKI 目录需对运行账户可读写，建议由宿主预先创建；相对路径基于进程工作目录。
+OPC UA 驱动实现 `IPushProtocolDriver`：`ApplyDevicesAsync` 后建立订阅并持续推送，`CollectionInterval` 无效。`Address` 为 `NodeId` 字符串（`ns=2;s=Tag`、`ns=2;i=1234`）；`DataType` 可选，服务端返回类型透传。
 
-**完整可运行示例（控制台 + 推送订阅）**：
+> 连接前会校验三项证书存储（应用/对端/颁发者）；即使 `security:None` + 匿名，`pkiissuerpath` 也不能为空，否则连接阶段直接抛 `BadConfigurationError`。四个 PKI 目录需对运行账户可读写；相对路径基于进程工作目录。
 
-```csharp
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using PlcLibrary.Controller.Interfaces;
-using PlcLibrary.DriverDomain.Models;
-using PlcLibrary.Extensions;
-using PlcLibrary.General.Configuration;
-using PlcLibrary.OpcUa;
-using PlcLibrary.Pipeline.Interfaces;
-
-var builder = Host.CreateApplicationBuilder(args);
-builder.Logging.SetMinimumLevel(LogLevel.Information);
-
-var device = new DeviceConfiguration
-{
-    Id = "line-01",
-    Name = "1号线",
-    // 必须与 [ProtocolDriverName("OPC_UA")] 完全一致，写 "OPC UA" 会被跳过
-    Protocol = "OPC_UA",
-    ConnectionString = "endpoint:opc.tcp://10.0.0.1:4840;security:None;timeout:10000;autoacceptcertificate:true;",
-    TagPoints =
-    [
-        new TagPointConfiguration
-        {
-            TagId = "MaterialBarcode1",
-            Address = "ns=2;s=SomeStringTag",   // OPC UA NodeId 字符串
-            DataType = "string",                // 可选，驱动直接透传服务端返回类型
-            QueueSize = 1,
-        },
-    ],
-    // OPC UA 是推送驱动，CollectionInterval 不参与订阅采集
-    CollectionInterval = TimeSpan.FromSeconds(1),
-};
-
-builder.Services
-    .AddPlcLibrary()
-    .AddDriver<OpcUaDriver>()
-    .AddSingleton<IDataHandler, ConsoleHandler>();
-
-var host = builder.Build();
-await host.StartAsync();
-
-await host.Services.GetRequiredService<IDeviceScheduler>().ApplyDevicesAsync([device]);
-await host.WaitForShutdownAsync();
-
-internal sealed class ConsoleHandler : IDataHandler
-{
-    public ValueTask HandleAsync(DriverResult result, CancellationToken ct)
-    {
-        Console.WriteLine(
-            $"[{result.DeviceId}/{result.TagId}] {result.Address} = {result.Value} ({result.Status})");
-        return ValueTask.CompletedTask;
-    }
-}
-```
-
-运行后，服务端点位变化会通过订阅回调打印：
-
-```text
-[line-01/MaterialBarcode1] ns=2;s=SomeStringTag = 165202#51080#261019#0017 (Good)
-```
-
-主动读取同一设备：
-
-```csharp
-using PlcLibrary.DriverDomain.Interfaces;
-
-var accessor = host.Services.GetRequiredService<IDeviceAccessor>();
-var values = await accessor.ReadAsync(device, device.TagPoints);
-foreach (var value in values)
-    Console.WriteLine($"{value.TagId} = {value.Value} ({value.Status})");
-```
-
-说明：
-
-- OPC UA 驱动实现 `IPushProtocolDriver`，`ApplyDevicesAsync` 后会建立订阅并持续推送；`CollectionInterval` 对推送驱动无效。
-- `Address` 使用 OPC UA `NodeId` 字符串（如 `ns=2;s=SomeStringTag`、`ns=2;i=1234`）。
-- `DataType` 可选；OPC UA 直接透传服务端返回的值。
-- 若服务端不可达，`ConnectAsync` 会报网络错误（如 `SocketException 10061`），这与证书配置错误不同；配置校验在连接前完成。
-
-**Mitsubishi**
+#### Mitsubishi
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | host | 127.0.0.1 | PLC 地址 |
 | port | 6000 | 端口 |
 | timeout | 3000 | 超时 (ms) |
-| protocoltype | MC | MC / A1E / FX |
+| protocoltype | MC | MC / A1E / A3C / FX |
 
 示例：`host:192.168.1.1;port:6000;protocoltype:MC`
 
-地址格式：三菱标准地址字符串，取决于所选协议类型：
+地址：`D100`、`M100`、`X10`、`Y20`、`W0`、`ZR100` 等（取决于协议类型）。
 
-| 协议类型 | 地址示例 | 说明 |
-|----------|----------|------|
-| `MC` | `D100`、`M100`、`X10`、`Y20`、`W0` | MELSEC MC 协议 |
-| `A1E` | `D100`、`M100`、`X0`、`Y0` | A-1E 协议 |
-| `FX` | `D100`、`M100`、`X0`、`Y0` | FX 编程口协议 |
+**字软元件上的 bool（`D`/`W`/`R`/`ZR`）**：按「读字 + 取 bit」实现，写入走「读字 → 改位 → 回写字」，避免 Snet 直接发位命令落到错误位：
 
-**Omron FINS**
+| 配置 | 语义 |
+|---|---|
+| `D110` + `DataType=bool` | 等价 `D110.0`（bit 0） |
+| `D110.5` + `DataType=bool` | `D110` 的 bit 5（0–15，超出返回 `BadConfigError`） |
+| `M110` + `DataType=bool` | 位软元件，直接位访问 |
+
+> 该语义自 1.3.0 起生效，属于**不兼容变更**；需要整字真值请用 `DataType=ushort` 后自行比较。
+
+#### Omron FINS
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | host | 127.0.0.1 | PLC 地址 |
-| port | 9600 | 端口 |
-| timeout | 3000 | 超时 (ms)，同时作用于连接与接收 |
-| localnode | 1 | ⚠️ 已解析但当前无效：底层 `FinsClient` 节点号属性为只读，无法配置 |
-| destinynode | 2 | ⚠️ 同上，暂无法配置 |
-| isudp | false | ⚠️ 已解析但当前无效：底层 FINS 客户端仅支持 TCP，UDP 传输暂不可用 |
+| port | 9600 | 端口（仅 TCP） |
+| timeout | 3000 | 连接/接收超时 (ms) |
+| localnode / destinynode | 1 / 2 | 已解析但当前无效（底层节点号由握手分配） |
+| isudp | false | 已解析但当前无效（FINS 客户端仅支持 TCP） |
 
-地址格式：Omron 标准 FINS 地址字符串。
+地址示例：DM `D100`；CIO `CIO200`/`CIO200.5`；WR `W100`；HR `H10`；AR `A0`。
 
-| 区域 | 地址示例 | 说明 |
-|------|----------|------|
-| DM | `D100`、`D200` | 数据存储器 |
-| CIO | `CIO200`、`CIO200.5` | 通道 I/O（`.5` 表示位） |
-| WR | `W100` | 工作继电器 |
-| HR | `H0`、`H10` | 保持继电器 |
-| AR | `A0` | 辅助继电器 |
+字/位点位自动按存储区合并为少量请求；`DataType` 决定分组与读取长度。
 
-示例：`host:192.168.1.1;port:9600;localnode:1;destinynode:2`
-
-**Allen-Bradley / Rockwell**
+#### Allen-Bradley / Rockwell
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| host | 127.0.0.1 | PLC / 网关模块地址 |
+| host | 127.0.0.1 | PLC/网关地址 |
 | port | 44818 | EtherNet/IP 端口 |
-| timeout | 5000 | ⚠️ 连接/IO 超时由驱动池 `OperationTimeout` 兜底，本字段暂未透传底层库 |
-| path | - | 路由路径（如 `1,0` 表示背板槽位 0） |
-| useconnected | false | Class 3 连接（高频轮询时推荐开启） |
+| timeout | 5000 | 连接/读写超时 (ms) |
+| path | - | 路由路径（`1,0` = 背板槽位 0） |
+| useconnected | false | Class 3 连接（高频轮询推荐开启） |
 
-地址格式：Logix 标签名。
+地址为 Logix 标签名：`rate`、`counts[3]`、`Temp[10].AnotherArray[4]`、`MyUdt.enable`、`matrix[1,2,3]`。
 
-| 地址示例 | 说明 |
-|----------|------|
-| `rate` | 基础标签（DINT/REAL/BOOL 等原子类型） |
-| `counts[3]` | 数组元素索引 |
-| `Temp[10].AnotherArray[4]` | 嵌套数组 |
-| `MyUdt.enable` | UDT 结构体成员 |
-| `matrix[1,2,3]` | 多维数组 |
+示例：`host:192.168.1.96`、`host:192.168.1.96;path:1,0`
 
-CompactLogix 示例：`host:192.168.1.96`
-
-ControlLogix 示例：`host:192.168.1.96;path:1,0`
-
-**BACnet**
+#### BACnet
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| host | 127.0.0.1 | 目标设备 IP |
-| port | 47808 | BACnet/IP 端口（本地监听 + 远端目标均使用） |
-| timeout | 5000 | 超时 (ms)，同时用于 WhoIs 设备发现等待 |
-| deviceinstance | 0 | 目标设备实例号；0 表示直接用 host 寻址，>0 时通过 WhoIs/IAm 广播发现实例对应的网络地址（未找到则连接失败） |
+| host | 127.0.0.1 | 目标设备 IP（可写 `ip:port` 覆盖远端端口） |
+| port | 47808 | BACnet/IP 端口（本地监听；远端直连时也使用） |
+| timeout | 5000 | WhoIs 设备发现等待 (ms)；读/写使用底层默认超时 |
+| deviceinstance | 0 | 0 = 直连 host；>0 = WhoIs/IAm 发现该实例 |
 | localendpointip | - | 多网卡时指定绑定 IP |
 
-地址格式：`TYPE:INSTANCE`（如 `AV:1` = Analog Value 1、`BI:0` = Binary Input 0）。
-
-支持类型：`AI`/`AO`/`AV`/`BI`/`BO`/`BV`/`MI`/`MO`/`MV`。
+地址：`TYPE:INSTANCE`（`AV:1`、`BI:0`）；类型 `AI/AO/AV/BI/BO/BV/MI/MO/MV`。
 
 示例：`host:192.168.1.50;port:47808;deviceinstance:12345`
 
-## 点位数据类型 (DataType)
+### `DataType` 支持
 
-部分驱动需要 `TagPointConfiguration.DataType` 指定点位的数据类型，以正确解析 PLC 返回值：
-
-| 驱动 | DataType 是否必需 | 未指定时的默认值 | 说明 |
+| 驱动 | 是否必需 | 未指定时 | 说明 |
 |------|:--:|------|------|
-| S7 | 否（string 除外） | 地址推断 | 标量由地址推断（`DBX`=bool, `DBW`=word）；**字符串需地址带长度**（`DB6000.DBB504.100` 读 S7 STRING(100)） |
-| Modbus | 否 | 地址前缀推断 | `0xxxx`=bool, `4xxxx`=ushort；配置 `DataType` 后解码为 string/float/int 等多寄存器值（见 Modbus 章节） |
-| OPC UA | 否 | 服务端返回 | 服务端告知类型，值透传 |
-| BACnet | 否 | 服务端返回 | `PROP_PRESENT_VALUE` 返回原始值 |
-| AllenBradley | **推荐** | `int` | 用于确定 `ReadAsync<T>` 的泛型类型 |
-| Mitsubishi | **推荐** | `Int32` | 映射为 Snet `DataType` 枚举 |
-| Omron | **推荐** | `int` | 分发到 `ReadInt16Async`/`ReadFloatAsync` 等方法 |
+| S7 | 否（string 除外） | 地址推断 | 标量由地址推断；STRING 需地址带长度 |
+| Modbus | 否 | 地址前缀 | `0xxxx`=bool、`4xxxx`=ushort；配置后解码多寄存器值 |
+| OPC UA | 否 | 服务端类型 | 值透传 |
+| BACnet | 否 | 服务端类型 | `PROP_PRESENT_VALUE` 原始值 |
+| AllenBradley | 推荐 | `int` | 决定 `ReadAsync<T>` 泛型；未知类型 `BadConfigError` |
+| Mitsubishi | 推荐 | `int` | 映射 Snet 标量/数组类型；未知类型 `BadConfigError` |
+| Omron | 推荐 | `int` | 决定字/位分组与长度；未知类型 `BadConfigError` |
 
-支持的 DataType 值（大小写不敏感）：
+支持值（大小写不敏感）：`bool`、`short`、`ushort`、`int`、`uint`、`long`、`ulong`、`float`、`double`、`string`，以及 `int16`/`uint16`/`int32`/`uint32`/`int64`/`uint64`/`real`/`lreal`/`dint`/`udint`/`lint`/`ulint`/`word`/`dword`/`lword` 等别名。
 
-| 简写 | 完整名称 | C# 类型 |
-|------|----------|--------|
-| `bool` | `System.Boolean` | `bool` |
-| `short` | `System.Int16` | `short` |
-| `ushort` | `System.UInt16` | `ushort` |
-| `int` | `System.Int32` | `int` |
-| `uint` | `System.UInt32` | `uint` |
-| `long` | `System.Int64` | `long` |
-| `ulong` | `System.UInt64` | `ulong` |
-| `float` | `System.Single` | `float` |
-| `double` | `System.Double` | `double` |
-| `string` | `System.String` | `string` |
-
-另支持 IEC 别名：`int16`/`uint16`/`int32`/`uint32`/`int64`/`uint64`/`real`/`lreal`/`dint`/`udint`/`lint`/`ulint`/`word`/`dword`/`lword`。
-
-```csharp
-// Omron D100 为 32 位浮点数
-new TagPointConfiguration { TagId = "temp", Address = "D100", DataType = "float" }
-
-// AllenBradley tag 为布尔量
-new TagPointConfiguration { TagId = "run", Address = "MotorRun", DataType = "bool" }
-```
-
-> `Length` 仅对 `DataType = "string"` 有效（字节数）；`ByteOrder` 目前主要由 Modbus 驱动消费，其它驱动可忽略。
-
-### 驱动池
+## 驱动池、管道与弹性
 
 ```json
 {
@@ -487,53 +383,44 @@ new TagPointConfiguration { TagId = "run", Address = "MotorRun", DataType = "boo
     "CircuitBreakerFailureRatio": 0.5,
     "OperationTimeout": "00:00:10",
     "PoolIdleTimeout": "00:10:00"
-  }
-}
-```
-
-- `PoolIdleTimeout`：空闲连接池回收阈值。设备热更新移除后，其连接池空置超过该时长且无在途借用时被自动销毁（释放连接与弹性管线），避免长期运行累积。`00:00:00` 表示禁用自动回收。
-
-### 管道
-
-```json
-{
+  },
   "Pipeline": {
     "Capacity": 10000,
     "MaxHandlerParallelism": 8,
-    "HandlerTimeout": "00:00:30"
+    "HandlerTimeout": "00:00:30",
+    "EnqueueTimeout": "00:00:05"
   }
 }
 ```
 
-### 弹性策略
-
-Polly 弹性分为两级（连接级每设备独立隔离；IO 级为全局共享管线）：
-
 | 级别 | 作用域 | 策略 | 触发位置 |
 |---|---|---|---|
-| **连接级** | `ConnectAsync` / `TryReconnectAsync` | 重试（指数退避） + 超时 + 断路器 | `DeviceSharedPool.AcquireAsync` |
-| **IO 级** | `ReadAsync` / `WriteAsync` | 重试（指数退避） + 超时 | `DeviceDriverPool.ReadAsync` / `WriteAsync` |
+| 连接级 | `ConnectAsync` / `TryReconnectAsync` | 重试 + 超时 + 断路器（每池独立） | `DeviceSharedPool.AcquireAsync` |
+| IO 级 | `ReadAsync` / `WriteAsync` | 重试 + 超时（进程级共享） | `DeviceDriverPool.ReadAsync/WriteAsync` |
 
-- **连接级断路器**：连续失败达阈值后进入熔断（默认 5 次、失败率 ≥ 50%、冷却 30s），熔断/半开/恢复均有 `ILogger` 日志。
-- **断线自动重连**：驱动在捕获到传输级故障（socket 断开、IO 超时等）时自动将自身状态置为 `Faulted`；连接池归还时丢弃坏驱动，下次采集用新连接重建（配合连接级断路器防止重连风暴）。
-- **IO 级重试**：仅当驱动 `ReadAsync`/`WriteAsync` **抛出异常**时自动重试（默认 3 次），排除 `OperationCanceledException` 和 `TimeoutRejectedException`。驱动通常将点位级失败转为 `DriverResult.Bad` 返回（不抛异常），此时由断线重连机制兜底。
-- 两级策略均复用 `DriverPool` 配置节中的 `MaxRetryAttempts`、`RetryDelay`、`OperationTimeout`。
+- 连接级断路器默认 5 次、失败率 ≥50%、冷却 30s；状态变更走 `ILogger`
+- 驱动捕获传输级故障时置 `Faulted`，池归还时丢弃并按需重建
+- 推送驱动失败由调度器监督循环按指数退避重建（5s 扫描，最长 60s 退避）
+- **卡死看门狗**：轮询采集超过 `max(4 × 采集周期, 30s)` 无进展、推送采集 5 分钟无数据时，监督循环会停止并按退避重建执行器；健康状态返回 `Faulted`
+- **IO 硬超时**：Polly 超时之后还有 2s 兜底；底层调用忽略取消令牌时也会返回，驱动被丢弃而不是放回池
+- **管道硬超时**：handler 超时是硬上限，忽略取消也不会卡住分发；写入队列最多等待 `EnqueueTimeout`（默认 5s），消费者不前进时丢弃该点并记录 `plc.pipeline.dropped`。handler 不应在返回 `ValueTask` 之前同步阻塞（否则会占住消费者，需自行改为异步）
+- IO 级只对**抛异常**的读写重试；驱动通常把点位错误转为 `DriverResult.Bad`，不触发重试
+- `PoolIdleTimeout`：空置池超过该时长且无在途借用时销毁；`00:00:00` 禁用
+- `MaxRetryAttempts` 必须 ≥ 1（配置 0 能通过 Options 校验，但首次下发设备会抛 Polly 校验异常，见 DEVELOPMENT「已知限制」）
 
-### 批量读支持
+## 批量读能力
 
-| 驱动 | 批量读 | 说明 |
-|------|:--:|------|
-| Modbus | ✅ | 连续地址合并 + PDU 上限自动切分 |
-| S7 | ✅ | `ReadMultipleVarsAsync` 批量 + 逐点回退 |
-| OPC UA | ✅ | 单请求批量 Read；订阅推送逐点回调 |
-| Mitsubishi | ✅ | `WriteAsync` 字典批量 |
-| AllenBradley | ✅ | `ReadMultipleAsync` 原始字节批量 + CIP 小端本地解码（string 标签逐点） |
-| BACnet | ✅ | `ReadPropertyMultipleAsync` 按对象分组批量 |
-| Omron | ⚠️ 待定 | 底层 `BatchReadAsync` 存在，但 FINS 字节序/长度单位无法离线验证，为避免静默数据错误暂未启用，接入真实设备后可开启 |
+| 驱动 | 说明 |
+|------|------|
+| Modbus | 连续地址合并 + PDU 上限自动切分（组级隔离） |
+| S7 | `ReadMultipleVarsAsync` 批量 + 逐点回退 |
+| OPC UA | 单请求批量 Read；订阅逐点回调 |
+| Mitsubishi | 同设备/同类型连续地址合并为一次数组读（`Int16Array`/`FloatArray`/…）；字软元件 bool 按字数组 + 取位；位软元件逐点 |
+| Omron | 同存储区连续字合并为一次 `Read`、连续位合并为一次 `ReadBit`（组级隔离） |
+| AllenBradley | `ReadMultipleAsync` 原始字节批量 + CIP 小端解码（string 逐点） |
+| BACnet | `ReadPropertyMultipleAsync` 按对象分组 |
 
 ## 实时值监控（PlcLibrary.Monitor）
-
-可选扩展包：把采集结果按 `(DeviceId, TagId)` 缓存为「最新值」，并只把**发生变化**的点位推送给订阅方，屏蔽轮询产生的重复（干扰）消息。
 
 ```bash
 dotnet add package PlcLibrary.Monitor
@@ -543,25 +430,22 @@ dotnet add package PlcLibrary.Monitor
 builder.Services
     .AddPlcLibrary()
     .AddDriver<S7Driver>()
-    .AddPlcMonitor();   // 默认配置；或 AddPlcMonitor(builder.Configuration) 绑定 "Monitor" 节
+    .AddPlcMonitor();   // 或 AddPlcMonitor(builder.Configuration) 绑定 "Monitor" 节
 ```
 
-`PlcMonitor` 以 `IDataHandler` 身份挂接在采集管道上，接收所有采集结果；对每个 `(DeviceId, TagId)` 去重（值或质量状态未变则不通知），缓存最新值。宿主通过 `IPlcMonitor` 订阅：
+`PlcMonitor` 以 `IDataHandler` 挂接管道，按 `(DeviceId, TagId)` 缓存最新值，只推送值或质量状态变化的点位：
 
 ```csharp
 public sealed class MyService(IPlcMonitor monitor)
 {
-    // 读取最新值（尚未收到数据时为 null）
     public DriverResult? Read(string deviceId, string tagId) => monitor.Get(deviceId, tagId);
 
-    // 订阅单点：先立即返回当前快照，随后仅在该点变化时产出
     public async Task WatchAsync(CancellationToken ct)
     {
         await foreach (var r in monitor.SubscribeAsync("plc-001", "t1", ct))
             Console.WriteLine($"[{r.DeviceId}] {r.Address} = {r.Value}");
     }
 
-    // 订阅整台设备的所有变化
     public async Task WatchDeviceAsync(CancellationToken ct)
     {
         await foreach (var r in monitor.SubscribeDeviceAsync("plc-001", ct))
@@ -570,191 +454,61 @@ public sealed class MyService(IPlcMonitor monitor)
 }
 ```
 
-### 完整示例
-
-从注册到订阅的端到端流程：
-
-```csharp
-using PlcLibrary.Controller.Interfaces;
-using PlcLibrary.Extensions;
-using PlcLibrary.General.Configuration;
-using PlcLibrary.Monitor.Extensions;
-using PlcLibrary.Monitor.Interfaces;
-using PlcLibrary.S7;
-
-var builder = Host.CreateApplicationBuilder(args);
-
-var devices = new[]
-{
-    new DeviceConfiguration
-    {
-        Id = "plc-001",
-        Protocol = "S7",
-        ConnectionString = "host:10.38.103.107;port:102;rack:0;slot:0;cpu:S71200;",
-        TagPoints = new[]
-        {
-            new TagPointConfiguration { TagId = "t1", Address = "DB21.DBX10.2", DataType = "System.Boolean" },
-        },
-        CollectionInterval = TimeSpan.FromSeconds(1),
-    },
-};
-
-builder.Services
-    .AddPlcLibrary()       // 1. 先注册核心（管道 + 调度）
-    .AddDriver<S7Driver>() // 2. 再注册协议驱动
-    .AddPlcMonitor();      // 3. 最后挂监控缓存（必须在 AddPlcLibrary 之后）
-
-var host = builder.Build();
-await host.StartAsync();
-
-// 推送设备配置，采集开始
-await host.Services.GetRequiredService<IDeviceScheduler>().ApplyDevicesAsync(devices);
-
-var monitor = host.Services.GetRequiredService<IPlcMonitor>();
-
-// 拉模式：读最新值（尚未收到数据时为 null）
-if (monitor.Get("plc-001", "t1") is { } current)
-    Console.WriteLine($"{current.Address} = {current.Value}");
-
-// 推模式：只收到「发生变化」的点位，轮询重复值不会打扰宿主
-await foreach (var r in monitor.SubscribeAsync("plc-001", "t1"))
-    Console.WriteLine($"{r.Address} = {r.Value}");
-```
-
-> 生产环境通常把 `await foreach` 放进 `BackgroundService`，用 `CancellationToken` 控制退出（见上面的 `MyService` 示例）。
-
-### 点位标识
-
-缓存键由 `DeviceId` + `TagId` 复合而成。**不同设备（不同 IP/连接串）即使配置了相同的 `TagId` 或相同的协议地址（如 `DB21.DBX10.2`），也互不干扰**——同型号 PLC 只换 IP 的场景下，各设备的点位独立缓存、独立通知。协议地址保留在 `DriverResult.Address` 上，不参与键比较。
-
-### 配置（可选）
-
-```json
-{
-  "Monitor": {
-    "EntryIdleTimeout": "00:05:00"  // 缓存条目空闲超时（设备下线后自动清理），"00:00:00" 禁用
-  }
-}
-```
-
-订阅通道容量固定为 1（latest-wins）：宿主消费慢于变化速率时，只保证最终拿到最新值，中间值可能被跳过。
-
-### 指标
-
-| 指标名 | 类型 | 说明 |
-|---|---|---|
-| `plc.monitor.updates` | `Counter<long>` | 监控收到的采集点数 |
-| `plc.monitor.changes` | `Counter<long>` | 值/状态变化并推送的点数 |
-
-与基础库共用 Meter `PlcLibrary`，宿主接入 OpenTelemetry 无需额外 `AddMeter`。
+- 缓存键 `DeviceId + TagId`：不同设备同 TagId/同地址互不干扰
+- 订阅先返回当前快照，之后只在变化时产出
+- 订阅通道容量 1（latest-wins）：消费慢时只保证最新值，中间值可能跳过
+- `Monitor.EntryIdleTimeout`（默认 5 分钟，`00:00:00` 禁用）清理长期无数据的条目
+- 指标：`plc.monitor.updates`、`plc.monitor.changes`（共用 Meter `PlcLibrary`）
 
 ## 可观测性
 
-PlcLibrary 通过 `System.Diagnostics.Metrics`（.NET 6+ 内置，零 NuGet 依赖）暴露以下指标：
+Meter `PlcLibrary`，读/写/获取指标带 `device.id`、`device.protocol`，管道指标带 `device.id`：
 
-> 读/写/获取相关指标均带 `device.id`、`device.protocol` 标签（按设备维度计数），管道指标带 `device.id` 标签。
+| 指标 | 类型 | 说明 |
+|---|---|---|
+| `plc.reads.total` | Counter\<long\> | 累计读取点位数 |
+| `plc.read.duration` | Histogram\<double\> | ReadAsync 耗时（含 IO 重试） |
+| `plc.read.errors` | Counter\<long\> | ReadAsync 最终失败次数（仅异常，不含 Bad 结果） |
+| `plc.write.total` | Counter\<long\> | 写操作数 |
+| `plc.acquire.duration` | Histogram\<double\> | 获取驱动耗时（含连接） |
+| `plc.pipeline.dispatched` | Counter\<long\> | 管道分发点数 |
+| `plc.pipeline.dropped` | Counter\<long\> | 管道/订阅丢弃点数（含写入超时） |
 
-### Meter: `PlcLibrary`
-
-| 指标名 | 类型 | 单位 | 说明 |
-|---|---|---|---|
-| `plc.reads.total` | `Counter<long>` | points | 累计采集点位总数 |
-| `plc.read.duration` | `Histogram<double>` | s | ReadAsync 完整耗时（含 IO 重试） |
-| `plc.read.errors` | `Counter<long>` | errors | ReadAsync 最终失败次数（含重试耗尽） |
-| `plc.write.total` | `Counter<long>` | ops | 累计写操作数 |
-| `plc.acquire.duration` | `Histogram<double>` | s | 连接池获取驱动耗时（含 connect） |
-| `plc.pipeline.dispatched` | `Counter<long>` | points | 管道分发点数 |
-| `plc.pipeline.dropped` | `Counter<long>` | points | 订阅通道溢出丢弃点数 |
-
-### 接入方式
-
-**OpenTelemetry Collector**（推荐）:
-
-```bash
-dotnet add package OpenTelemetry.Exporter.Prometheus.AspNetCore
-```
+`ActivitySource("PlcLibrary")` 的 Span：`PlcLibrary.ReadAsync`、`PlcLibrary.WriteAsync`、`PlcLibrary.Acquire`、`PlcLibrary.Dispatch`（标签见 DEVELOPMENT）。
 
 ```csharp
 builder.Services.AddOpenTelemetry()
-    .WithMetrics(m => m
-        .AddMeter("PlcLibrary")
-        .AddPrometheusExporter())
-    .WithTracing(t => t
-        .AddSource("PlcLibrary")
-        .AddConsoleExporter()); // 或 Jaeger/OTLP
+    .WithMetrics(m => m.AddMeter("PlcLibrary").AddPrometheusExporter())
+    .WithTracing(t => t.AddSource("PlcLibrary").AddOtlpExporter());
 ```
 
-启动后访问 `/metrics` 即可被 Prometheus 抓取，Grafana 中查询 `plc_read_duration_seconds_bucket` 等指标。
+Grafana 查询示例：
 
-### 分布式追踪（ActivitySource）
-
-基础库在关键路径埋点 `ActivitySource("PlcLibrary")`，宿主接入 OpenTelemetry 后即可串联"调度 → 连接池 → 驱动 → 管道 → handler"的完整链路：
-
-| Span 名称 | 埋点位置 | 标签 |
-|-----------|---------|------|
-| `PlcLibrary.ReadAsync` | `DeviceDriverPool.ReadAsync` | device.id / device.protocol / point.count |
-| `PlcLibrary.WriteAsync` | `DeviceDriverPool.WriteAsync` | device.id / device.protocol / point.count |
-| `PlcLibrary.Acquire` | `DeviceSharedPool.AcquireAsync` | device.id / device.protocol |
-| `PlcLibrary.Dispatch` | `DriverResultPipeline.DispatchAsync` | device.id / tag.id / status |
-
-无监听器时 `StartActivity` 返回 null，埋点开销可忽略；库不依赖任何 OTel 包。
-
-**dotnet-counters**（本地调试）:
-
-```bash
-dotnet-counters monitor -n MyApp --counters PlcLibrary
-```
-
-### Grafana 面板示例
-
-```
-# 采集吞吐 (points/s)
+```promql
 rate(plc_reads_total[1m])
-
-# 读延迟 p50 / p99
-histogram_quantile(0.50, rate(plc_read_duration_seconds_bucket[1m]))
 histogram_quantile(0.99, rate(plc_read_duration_seconds_bucket[1m]))
-
-# 错误率
 rate(plc_read_errors_total[1m]) / rate(plc_reads_total[1m])
-
-# 通道丢弃率
 rate(plc_pipeline_dropped_total[1m])
-```
-
-```json
-{
-  "Pipeline": {
-    "Capacity": 10000,
-    "MaxHandlerParallelism": 8,
-    "HandlerTimeout": "00:00:30"
-  }
-}
 ```
 
 ## API
 
-### 核心接口
-
 | 接口 | 说明 |
 |------|------|
-| `IDeviceScheduler` | 推送设备配置，差量 reconcile；`GetDeviceHealthAsync()` 查询运行状态 |
-| `IDataHandler` | 接收采集推送 |
+| `IDeviceScheduler` | 推送设备配置（差量 reconcile）、查询健康状态 |
+| `IDataHandler` | 接收采集结果 |
 | `IDeviceAccessor` | 主动读写设备 |
-| `IProtocolDriver` | 协议驱动实现（开发文档见 [DEVELOPMENT.md](./DEVELOPMENT.md)） |
-| `IDriverFactory` | 驱动工厂（通常用 `AddDriver<T>` 替代） |
-| `IDataPipeline` | 数据管道（通常不需要直接使用） |
-| `IPlcMonitor` | 实时值监控缓存（`PlcLibrary.Monitor` 包），缓存最新值并订阅变化 |
-
-### 主动读写
+| `IProtocolDriver` | 协议驱动实现 |
+| `IPushProtocolDriver` | 推送型驱动（订阅/回调） |
+| `IDriverFactory` | 驱动工厂（通常由 `AddDriver<T>` 生成） |
+| `IDataPipeline` | 数据管道（一般无需直接使用） |
+| `IPlcMonitor` | 实时值缓存与变化订阅（Monitor 包） |
 
 ```csharp
 public class MyService(IDeviceAccessor accessor)
 {
     public async Task ReadDevice(DeviceConfiguration device)
-    {
-        var values = await accessor.ReadAsync(device, device.TagPoints);
-    }
+        => await accessor.ReadAsync(device, device.TagPoints);
 
     public async Task WriteDevice(DeviceConfiguration device)
     {
@@ -767,12 +521,6 @@ public class MyService(IDeviceAccessor accessor)
 }
 ```
 
-### 设备级连接超时
-
-`DeviceConfiguration.ConnectionTimeout` 可覆盖全局 `PoolOptions.OperationTimeout`，在获取驱动时优先使用设备级配置。默认 `00:00:05`；设为 `00:00:00`（`TimeSpan.Zero`）时使用全局配置。
-
-断路器状态变更（熔断/半开/恢复）通过 `ILogger` 输出 `Warning`/`Information` 级别日志，每设备独立隔离。
-
 ### 健康状态
 
 ```csharp
@@ -783,14 +531,11 @@ foreach (var d in health)
     Console.WriteLine($"{d.DeviceId} [{d.Protocol}] {(d.IsRunning ? "OK" : d.Error)}");
 ```
 
-返回 `IReadOnlyList<DeviceHealthInfo>`，每个设备包含 `DeviceId`、`Protocol`、`IsRunning`、`Error` 和 `UpdatedAt`。
+`DeviceHealthInfo` 包含 `DeviceId`、`Protocol`、`IsRunning`、`Error`、`UpdatedAt`；`Error` 来自执行器最近一次异常。
 
-### 接入 ASP.NET Core HealthChecks（宿主侧适配示例）
-
-基础库只提供健康数据源，`IHealthCheck` 适配由宿主实现（约 10 行）：
+ASP.NET Core HealthChecks 适配（宿主实现，约 10 行）：
 
 ```csharp
-// 宿主项目：dotnet add package Microsoft.Extensions.Diagnostics.HealthChecks
 public sealed class PlcHealthCheck(IDeviceScheduler scheduler) : IHealthCheck
 {
     public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken ct = default)
@@ -803,28 +548,39 @@ public sealed class PlcHealthCheck(IDeviceScheduler scheduler) : IHealthCheck
     }
 }
 
-// Program.cs
 builder.Services.AddHealthChecks().AddCheck<PlcHealthCheck>("plc");
 app.MapHealthChecks("/healthz");
 ```
 
-### 采集推送（OPC UA 订阅）为何不走连接池
+### 为什么 OPC UA 订阅不走连接池
 
-轮询类驱动（S7/Modbus/AB/...）的读操作经连接池借用/归还；而 OPC UA 订阅（`IPushProtocolDriver`）使用**专用长连接**——订阅状态（MonitoredItem、发布队列）绑定在驱动实例上，池化借用会破坏订阅语义。因此 `PushCollector` 为每个设备创建独立驱动实例，并拥有自己的连接级弹性管线（`Push:{deviceId}`，含重试/超时/断路器）；该管线随采集器销毁而移除。
+轮询驱动按次借用连接；OPC UA 订阅状态（MonitoredItem、发布队列）绑定驱动实例，池化会破坏订阅语义。因此 `PushCollector` 为每台设备创建独立驱动与连接级弹性管线，随采集器释放。详见 [DEVELOPMENT.md](./DEVELOPMENT.md)。
+
+## 已知限制与后续计划
+
+| 限制 | 说明 |
+|---|---|
+| OPC UA 可写节点 | 离线回环使用 SDK 标准节点（读/订阅已覆盖）；自定义 NodeManager 的可写语义需真实服务端确认 |
+| S7 标量 `DataType` | 不参与解码，`DBD` 返回 `uint`（`REAL` 需自行按位转换） |
+| Mitsubishi 批量写 | 底层库只返回整体结果，部分点失败时整批标 `Bad` |
+| BACnet 读/写超时 | `timeout` 仅用于 WhoIs 发现，读写依赖底层默认 |
+| 共享池配置 | 同连接串多设备共享池，池按首个设备的 `ConnectionTimeout` 创建 |
+| 串口物理层 | 离线仅覆盖参数映射与失败路径，RTU/ASCII 帧需真机/虚拟串口对 |
+| 厂商语义 | 字节序、位地址等以模拟器 + 规范为准，建议上线前做一次真机联调 |
+
+未修复项、优先级与验证矩阵见 [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md)；工程决策与测试策略见 [DEVELOPMENT.md](./DEVELOPMENT.md)。
 
 ## 致谢
 
-本项目基于以下优秀的开源库构建：
-
-| 库 | 用途 | GitHub |
-|----|------|--------|
-| [S7netplus](https://www.nuget.org/packages/S7netplus) | Siemens S7 通信 | [github.com/S7NetPlus/s7netplus](https://github.com/S7NetPlus/s7netplus) |
-| [NModbus](https://www.nuget.org/packages/NModbus) | Modbus 协议 | [github.com/NModbus/NModbus](https://github.com/NModbus/NModbus) |
-| [OPCFoundation.NetStandard.Opc.Ua.Client](https://www.nuget.org/packages/OPCFoundation.NetStandard.Opc.Ua.Client) | OPC UA 客户端 | [github.com/OPCFoundation/UA-.NETStandard](https://github.com/OPCFoundation/UA-.NETStandard) |
-| [Snet.Mitsubishi](https://www.nuget.org/packages/Snet.Mitsubishi) | 三菱 MC/A1E/FX 协议 | [github.com/shunnet](https://github.com/shunnet)（组织） |
-| [NewLife.Omron](https://www.nuget.org/packages/NewLife.Omron) | 欧姆龙 FINS/HostLink 协议 | [github.com/NewLifeX/NewLife.Omron](https://github.com/NewLifeX/NewLife.Omron) |
-| [EthernetIPSharp](https://www.nuget.org/packages/EthernetIPSharp) | Allen-Bradley EtherNet/IP | [github.com/CristianMori/EthernetIpSharp](https://github.com/CristianMori/EthernetIpSharp) |
-| [BACnet](https://www.nuget.org/packages/BACnet) | BACnet 协议栈 | [github.com/ela-compil/BACnet](https://github.com/ela-compil/BACnet) |
+| 库 | 用途 |
+|----|------|
+| [S7netplus](https://github.com/S7NetPlus/s7netplus) | Siemens S7 |
+| [NModbus](https://github.com/NModbus/NModbus) | Modbus |
+| [OPCFoundation.NetStandard.Opc.Ua.Client](https://github.com/OPCFoundation/UA-.NETStandard) | OPC UA |
+| [Snet.Mitsubishi](https://www.nuget.org/packages/Snet.Mitsubishi) | Mitsubishi MC/A1E/A3C/FX |
+| [NewLife.Omron](https://github.com/NewLifeX/NewLife.Omron) | Omron FINS |
+| [EthernetIPSharp](https://github.com/CristianMori/EthernetIpSharp) | Allen-Bradley EtherNet/IP |
+| [BACnet](https://github.com/ela-compil/BACnet) | BACnet 协议栈 |
 
 ## 许可证
 

@@ -38,8 +38,6 @@ namespace PlcLibrary.Extensions
 
         private static IServiceCollection AddPlcLibraryCore(this IServiceCollection services)
         {
-            services.AddSingleton<ManagedResiliencePipelineRegistry>();
-
             services.AddSingleton<IDeviceAccessor, DeviceDriverPool>();
 
             services.AddSingleton<DriverResultPipeline>();

@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -15,7 +15,6 @@ namespace PlcLibrary.Tests.DriverPool;
 public class DeviceDriverPoolTests
 {
     private readonly ILoggerFactory _loggerFactory = NullLoggerFactory.Instance;
-    private readonly ManagedResiliencePipelineRegistry _pipelineRegistry = new();
     private readonly Mock<IOptions<PoolOptions>> _options = new();
     private readonly Mock<IDriverFactory> _factory = new();
     private readonly DeviceConfiguration _device = new()
@@ -169,7 +168,7 @@ public class DeviceDriverPoolTests
             MaxConnectionsPerDevice = 1,
             OperationTimeout = TimeSpan.FromMilliseconds(100),
         });
-        var pool = new DeviceDriverPool(options.Object, [_factory.Object], _loggerFactory, _pipelineRegistry);
+        var pool = new DeviceDriverPool(options.Object, [_factory.Object], _loggerFactory);
 
         // IO 超时（TimeoutRejectedException）应触发驱动断开，避免复用状态未知的连接
         await Assert.ThrowsAsync<TimeoutRejectedException>(
@@ -201,7 +200,7 @@ public class DeviceDriverPoolTests
             MaxConnectionsPerDevice = 1,
             PoolIdleTimeout = TimeSpan.FromSeconds(1),
         });
-        var pool = new DeviceDriverPool(options.Object, [_factory.Object], _loggerFactory, _pipelineRegistry);
+        var pool = new DeviceDriverPool(options.Object, [_factory.Object], _loggerFactory);
 
         await pool.ReadAsync(_device, _device.TagPoints, CancellationToken.None);
         Assert.Equal(1, createCount);
@@ -219,5 +218,5 @@ public class DeviceDriverPoolTests
     }
 
     private DeviceDriverPool CreatePool()
-        => new(_options.Object, [_factory.Object], _loggerFactory, _pipelineRegistry);
+        => new(_options.Object, [_factory.Object], _loggerFactory);
 }

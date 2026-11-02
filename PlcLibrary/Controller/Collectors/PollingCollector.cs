@@ -15,8 +15,16 @@ namespace PlcLibrary.Controller.Collectors
         ILogger<PollingCollector> logger,
         DeviceConfiguration device,
         IDeviceAccessor accessor,
-        IDataPipeline pipeline) : IDeviceCollector
+        IDataPipeline pipeline) : IDeviceCollector, ICollectorHeartbeat
     {
+        private long _lastActivityTicks = DateTime.UtcNow.Ticks;
+
+        public DateTime LastActivityUtc => new(Volatile.Read(ref _lastActivityTicks), DateTimeKind.Utc);
+
+        // 一个轮询周期最多允许“4 个采集间隔 + 30s”没有进展，避免把慢设备误判为卡死。
+        public TimeSpan StallTimeout { get; } = TimeSpan.FromTicks(
+            Math.Max(device.CollectionInterval.Ticks * 4, TimeSpan.FromSeconds(30).Ticks));
+
         public async Task ExecuteAsync(CancellationToken ct)
         {
             using var timer = new PeriodicTimer(device.CollectionInterval);
@@ -25,6 +33,11 @@ namespace PlcLibrary.Controller.Collectors
                 try { await CollectOnceAsync(ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { return; }
                 catch (Exception ex) { ControllerLog.LogCollectionFailed(logger, ex, device.Id); }
+                finally
+                {
+                    // 只要一个采集周期结束（成功或失败）就刷新心跳；卡在 ReadAsync/HandleAsync 时不会执行到这里。
+                    Volatile.Write(ref _lastActivityTicks, DateTime.UtcNow.Ticks);
+                }
             }
         }
 

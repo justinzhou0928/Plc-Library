@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using PlcLibrary.DriverDomain;
 using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Enums;
@@ -8,6 +8,7 @@ using PlcLibrary.General.Configuration;
 using System;
 using System.Collections.Generic;
 using System.IO.BACnet;
+using System.IO.BACnet.Serialize;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -81,7 +82,14 @@ namespace PlcLibrary.Bacnet
         private async Task<BacnetAddress> ResolveDeviceAddressAsync(BacnetClient client, CancellationToken ct)
         {
             if (_config.DeviceInstance == 0)
-                return new BacnetAddress(BacnetAddressTypes.IP, _config.Host, (ushort)_config.Port);
+            {
+                // BacnetAddress(IP, address, network) 的第三个参数是 BACnet 网络号，不是端口；
+                // 端口必须写在地址字符串里（ip:port），否则远端永远是 47808。
+                var addressText = _config.Host.Contains(':', StringComparison.Ordinal)
+                    ? _config.Host
+                    : $"{_config.Host}:{_config.Port}";
+                return new BacnetAddress(BacnetAddressTypes.IP, addressText, 0);
+            }
 
             var tcs = new TaskCompletionSource<BacnetAddress>(TaskCreationOptions.RunContinuationsAsynchronously);
             BacnetClient.IamHandler handler = null!;
@@ -154,7 +162,12 @@ namespace PlcLibrary.Bacnet
             var (client, deviceAddress) = GetClientOrThrow();
             if (points.Length == 0) return [];
 
+            // 默认填充 Bad：厂商设备可能返回不完整的 RMP-ACK（省略某些对象），
+            // 不能把数组默认值（Status=Good）当成有效数据返回。
             var results = new DriverResult[points.Length];
+            for (var i = 0; i < points.Length; i++)
+                results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadCommFailure,
+                    "No response for object");
 
             // 按对象分组：同 objectId 的点位一次 ReadPropertyMultiple 批量读取
             var groups = new Dictionary<BacnetObjectId, List<int>>();
@@ -177,7 +190,10 @@ namespace PlcLibrary.Bacnet
             {
                 var specs = groups.Keys
                     .Select(id => new BacnetReadAccessSpecification(id,
-                        new List<BacnetPropertyReference> { new(BacnetPropertyIds.PROP_PRESENT_VALUE, 0) }))
+                        new List<BacnetPropertyReference>
+                        {
+                            new(BacnetPropertyIds.PROP_PRESENT_VALUE, ASN1.BACNET_ARRAY_ALL),
+                        }))
                     .ToList();
                 try
                 {
@@ -192,10 +208,16 @@ namespace PlcLibrary.Bacnet
 
                         foreach (var idx in indices)
                         {
-                            results[idx] = value is not null
-                                ? DriverResult.Good(points[idx].Address, value)
-                                : DriverResult.Bad(points[idx].Address, QualityCode.BadCommFailure,
-                                    "Read returned null or empty");
+                            // 逐对象错误在 RMP-ACK 中以 BacnetError 形式返回，必须降级为 Bad，
+                            // 否则错误对象会被当成 Good 值进入缓存/监控（静默坏数据）。
+                            results[idx] = value switch
+                            {
+                                null => DriverResult.Bad(points[idx].Address, QualityCode.BadCommFailure,
+                                    "Read returned null or empty"),
+                                BacnetError bacnetError => DriverResult.Bad(points[idx].Address,
+                                    QualityCode.BadCommFailure, $"BACnet error: {bacnetError}"),
+                                _ => DriverResult.Good(points[idx].Address, value),
+                            };
                         }
                     }
                 }
@@ -235,9 +257,11 @@ namespace PlcLibrary.Bacnet
                 {
                     var objId = new BacnetObjectId(objType, instance);
                     var bacnetValue = new BacnetValue(entryList[i].Value);
+                    // 参数顺序：invokeId, priority, arrayIndex, ct。Present_Value 不是数组属性，
+                    // arrayIndex 必须用 BACNET_ARRAY_ALL（0xFFFFFFFF），不能把超时值传进来。
                     await client.WritePropertyAsync(deviceAddress, objId,
                         BacnetPropertyIds.PROP_PRESENT_VALUE, [bacnetValue], 0, null,
-                        (uint)_config.Timeout, ct).ConfigureAwait(false);
+                        ASN1.BACNET_ARRAY_ALL, ct).ConfigureAwait(false);
 
                     results[i] = DriverResult.Good(entryList[i].Key.Address, null);
                 }

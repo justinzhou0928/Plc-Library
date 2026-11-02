@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using NModbus;
 using PlcLibrary.DriverDomain;
 using PlcLibrary.DriverDomain.Enums;
@@ -17,13 +17,20 @@ namespace PlcLibrary.Modbus
     {
         private readonly ILogger _logger;
         private readonly byte _slaveId;
-        private readonly Func<IModbusMaster> _masterFactory;
+        private readonly Func<CancellationToken, Task<IModbusMaster>> _masterFactory;
         private readonly string _defaultByteOrder;
         private readonly object _stateLock = new();
         private IModbusMaster? _master;
         private DriverStatus _status = DriverStatus.Disconnected;
 
         protected ModbusDriverBase(ILogger logger, ModbusDriverConfig config, Func<IModbusMaster> masterFactory)
+            : this(logger, config, _ => Task.FromResult(masterFactory()))
+        {
+        }
+
+        /// <summary>异步工厂重载：TCP 等需要异步连接的传输可在此完成连接并响应取消/超时。</summary>
+        protected ModbusDriverBase(
+            ILogger logger, ModbusDriverConfig config, Func<CancellationToken, Task<IModbusMaster>> masterFactory)
         {
             _logger = logger;
             _slaveId = config.SlaveId;
@@ -38,14 +45,14 @@ namespace PlcLibrary.Modbus
             get { lock (_stateLock) return _status; }
         }
 
-        public Task ConnectAsync(CancellationToken ct = default)
+        public async Task ConnectAsync(CancellationToken ct = default)
         {
             try
             {
                 Disconnect(ct);
                 lock (_stateLock) _status = DriverStatus.Connecting;
 
-                var newMaster = _masterFactory();
+                var newMaster = await _masterFactory(ct).ConfigureAwait(false);
 
                 IModbusMaster? oldMaster;
                 lock (_stateLock)
@@ -56,7 +63,6 @@ namespace PlcLibrary.Modbus
                 }
 
                 try { oldMaster?.Dispose(); } catch { }
-                return Task.CompletedTask;
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
@@ -222,6 +228,9 @@ namespace PlcLibrary.Modbus
         private const int MaxWriteCoilsPerRequest = 1968;
         private const int MaxWriteRegistersPerRequest = 123;
 
+        // Modbus 地址空间（1-based 前缀地址 1..65536，内部偏移 0..65535）
+        private const int AddressSpace = 65536;
+
         private static int ReadLimit(ModbusType type)
             => type is ModbusType.Coil or ModbusType.DiscreteInput
                 ? MaxReadBitsPerRequest : MaxReadRegistersPerRequest;
@@ -234,7 +243,7 @@ namespace PlcLibrary.Modbus
             ModbusType Type,
             ushort Offset,
             int WordCount,
-            ModbusValueKind Kind,
+            TypeCode Kind,
             int StringLength,
             ByteOrderMap ByteOrder);
 
@@ -302,17 +311,17 @@ namespace PlcLibrary.Modbus
                     return false;
                 }
 
-                ModbusValueKind kind;
+                TypeCode kind;
                 if (string.IsNullOrWhiteSpace(point.DataType))
                 {
-                    kind = ModbusValueKind.Boolean;
+                    kind = TypeCode.Boolean;
                 }
                 else if (!ModbusValueCodec.TryGetKind(point.DataType, out kind, out error))
                 {
                     return false;
                 }
 
-                if (kind != ModbusValueKind.Boolean)
+                if (kind != TypeCode.Boolean)
                 {
                     error = $"Bit address '{point.Address}' supports only bool DataType";
                     return false;
@@ -329,7 +338,7 @@ namespace PlcLibrary.Modbus
             var stringLength = 0;
             ByteOrderMap byteOrder;
 
-            if (valueKind == ModbusValueKind.String)
+            if (valueKind == TypeCode.String)
             {
                 if (point.Length <= 0)
                 {
@@ -361,9 +370,9 @@ namespace PlcLibrary.Modbus
                     return false;
             }
 
-            if (offset + wordCount > 65536)
+            if (offset + wordCount > AddressSpace)
             {
-                error = $"Point '{point.Address}' spans beyond the Modbus address space (65536)";
+                error = $"Point '{point.Address}' spans beyond the Modbus address space ({AddressSpace})";
                 return false;
             }
 
@@ -595,7 +604,7 @@ namespace PlcLibrary.Modbus
             if (string.IsNullOrEmpty(address) || address.Length < 2) return false;
 
             var prefix = address[0];
-            if (!int.TryParse(address.Substring(1), out var num) || num < 1 || num > 65536) return false;
+            if (!int.TryParse(address.Substring(1), out var num) || num < 1 || num > AddressSpace) return false;
 
             switch (prefix)
             {

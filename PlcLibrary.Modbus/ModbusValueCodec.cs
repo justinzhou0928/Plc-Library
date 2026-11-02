@@ -6,23 +6,16 @@ using PlcLibrary.DriverDomain.Parser;
 
 namespace PlcLibrary.Modbus
 {
-    internal enum ModbusValueKind
-    {
-        UInt16,
-        Int16,
-        UInt32,
-        Int32,
-        UInt64,
-        Int64,
-        Single,
-        Double,
-        Boolean,
-        String,
-    }
-
     /// <summary>
+    /// Modbus 寄存器层面的值类型：由核心 <c>DataTypeMapper</c> 解析出的 CLR <see cref="Type"/> 投影而来，
+    /// 只用于确定字长和解码方式；对外配置仍然是 <c>TagPointConfiguration.DataType</c>，不是第二套对外类型。
+    /// </summary>
+
+/// <summary>
     /// 字节序映射。AB 为恒等（大端），BA 为字内字节交换，CDAB 为字交换，DCBA 为全反；
     /// 64 位使用 8 字符排列（如 GHEFCDAB 表示 16 位字逆序）。
+    /// BCL 的 <c>BinaryPrimitives</c> 只区分大小端，不提供 AB/BA/ABCD/CDAB/DCBA 这类任意字/字节排列，
+    /// 因此需要这层排列映射；它只服务于 Modbus 寄存器布局，不是通用序列化。
     /// </summary>
     internal readonly struct ByteOrderMap
     {
@@ -103,16 +96,20 @@ namespace PlcLibrary.Modbus
         }
     }
 
-    /// <summary>Modbus 多寄存器值编解码：ushort[] + ByteOrder + DataType → CLR 值，读写共用。</summary>
+    /// <summary>
+    /// Modbus 多寄存器值编解码：ushort[] + ByteOrder + 核心 DataType → CLR 值，读写共用。
+    /// NModbus 官方 API 只提供 <c>ushort[]</c>/<c>bool[]</c>，不解释 32/64 位、float、string 或厂商字节序；
+    /// 本类负责“核心 DataType → Modbus 寄存器布局”的转换，字节序排列由 <see cref="ByteOrderMap"/> 描述。
+    /// </summary>
     internal static class ModbusValueCodec
     {
-        internal static bool TryGetKind(string? dataType, out ModbusValueKind kind, out string? error)
+        internal static bool TryGetKind(string? dataType, out TypeCode kind, out string? error)
         {
             error = null;
 
             if (string.IsNullOrWhiteSpace(dataType))
             {
-                kind = ModbusValueKind.UInt16;
+                kind = TypeCode.UInt16;
                 return true;
             }
 
@@ -123,75 +120,50 @@ namespace PlcLibrary.Modbus
                 return false;
             }
 
-            switch (Type.GetTypeCode(type))
+            var code = Type.GetTypeCode(type);
+            if (code is TypeCode.UInt16 or TypeCode.Int16 or TypeCode.UInt32 or TypeCode.Int32
+                or TypeCode.UInt64 or TypeCode.Int64 or TypeCode.Single or TypeCode.Double
+                or TypeCode.Boolean or TypeCode.String)
             {
-                case TypeCode.UInt16:
-                    kind = ModbusValueKind.UInt16;
-                    return true;
-                case TypeCode.Int16:
-                    kind = ModbusValueKind.Int16;
-                    return true;
-                case TypeCode.UInt32:
-                    kind = ModbusValueKind.UInt32;
-                    return true;
-                case TypeCode.Int32:
-                    kind = ModbusValueKind.Int32;
-                    return true;
-                case TypeCode.UInt64:
-                    kind = ModbusValueKind.UInt64;
-                    return true;
-                case TypeCode.Int64:
-                    kind = ModbusValueKind.Int64;
-                    return true;
-                case TypeCode.Single:
-                    kind = ModbusValueKind.Single;
-                    return true;
-                case TypeCode.Double:
-                    kind = ModbusValueKind.Double;
-                    return true;
-                case TypeCode.Boolean:
-                    kind = ModbusValueKind.Boolean;
-                    return true;
-                case TypeCode.String:
-                    kind = ModbusValueKind.String;
-                    return true;
-                default:
-                    kind = default;
-                    error = $"DataType '{dataType}' is not supported on Modbus 16-bit registers";
-                    return false;
+                kind = code;
+                return true;
             }
+
+            kind = default;
+            error = $"DataType '{dataType}' is not supported on Modbus 16-bit registers";
+            return false;
         }
 
-        internal static int GetByteWidth(ModbusValueKind kind)
+        internal static int GetByteWidth(TypeCode kind)
             => kind switch
             {
-                ModbusValueKind.UInt16 or ModbusValueKind.Int16 or ModbusValueKind.Boolean => 2,
-                ModbusValueKind.UInt32 or ModbusValueKind.Int32 or ModbusValueKind.Single => 4,
-                ModbusValueKind.UInt64 or ModbusValueKind.Int64 or ModbusValueKind.Double => 8,
+                TypeCode.UInt16 or TypeCode.Int16 or TypeCode.Boolean => 2,
+                TypeCode.UInt32 or TypeCode.Int32 or TypeCode.Single => 4,
+                TypeCode.UInt64 or TypeCode.Int64 or TypeCode.Double => 8,
                 _ => 2,
             };
 
-        internal static bool TryGetWordCount(ModbusValueKind kind, int stringLength, out int wordCount, out string? error)
+        internal static bool TryGetWordCount(TypeCode kind, int stringLength, out int wordCount, out string? error)
         {
             error = null;
             switch (kind)
             {
-                case ModbusValueKind.UInt16:
-                case ModbusValueKind.Int16:
-                case ModbusValueKind.Boolean:
+                case TypeCode.UInt16:
+                case TypeCode.Int16:
+                case TypeCode.Boolean:
                     wordCount = 1;
                     return true;
-                case ModbusValueKind.UInt32:
-                case ModbusValueKind.Int32:
-                case ModbusValueKind.Single:
+                case TypeCode.UInt32:
+                case TypeCode.Int32:
+                case TypeCode.Single:
                     wordCount = 2;
                     return true;
-                case ModbusValueKind.UInt64:
-                case ModbusValueKind.Int64:
-                case ModbusValueKind.Double:
+                case TypeCode.UInt64:
+                case TypeCode.Int64:
+                case TypeCode.Double:
                     wordCount = 4;
                     return true;
-                case ModbusValueKind.String:
+                case TypeCode.String:
                     if (stringLength <= 0)
                     {
                         wordCount = 0;
@@ -223,13 +195,13 @@ namespace PlcLibrary.Modbus
             return ByteOrderMap.TryParse(value, value.Length, out _, out _);
         }
 
-        internal static object Decode(ReadOnlySpan<ushort> registers, ModbusValueKind kind, int stringLength,
+        internal static object Decode(ReadOnlySpan<ushort> registers, TypeCode kind, int stringLength,
             in ByteOrderMap byteOrder)
         {
-            if (kind == ModbusValueKind.String)
+            if (kind == TypeCode.String)
                 return DecodeString(registers, stringLength, byteOrder);
 
-            if (kind == ModbusValueKind.Boolean)
+            if (kind == TypeCode.Boolean)
                 return registers[0] != 0;
 
             var width = GetByteWidth(kind);
@@ -246,28 +218,28 @@ namespace PlcLibrary.Modbus
 
             switch (kind)
             {
-                case ModbusValueKind.UInt16:
+                case TypeCode.UInt16:
                     return BinaryPrimitives.ReadUInt16BigEndian(value);
-                case ModbusValueKind.Int16:
+                case TypeCode.Int16:
                     return BinaryPrimitives.ReadInt16BigEndian(value);
-                case ModbusValueKind.UInt32:
+                case TypeCode.UInt32:
                     return BinaryPrimitives.ReadUInt32BigEndian(value);
-                case ModbusValueKind.Int32:
+                case TypeCode.Int32:
                     return BinaryPrimitives.ReadInt32BigEndian(value);
-                case ModbusValueKind.UInt64:
+                case TypeCode.UInt64:
                     return BinaryPrimitives.ReadUInt64BigEndian(value);
-                case ModbusValueKind.Int64:
+                case TypeCode.Int64:
                     return BinaryPrimitives.ReadInt64BigEndian(value);
-                case ModbusValueKind.Single:
+                case TypeCode.Single:
                     return BinaryPrimitives.ReadSingleBigEndian(value);
-                case ModbusValueKind.Double:
+                case TypeCode.Double:
                     return BinaryPrimitives.ReadDoubleBigEndian(value);
                 default:
                     throw new NotSupportedException($"Unsupported Modbus value kind '{kind}'");
             }
         }
 
-        internal static bool TryEncode(object? value, ModbusValueKind kind, int stringLength,
+        internal static bool TryEncode(object? value, TypeCode kind, int stringLength,
             in ByteOrderMap byteOrder, Span<ushort> destination, out string? error)
         {
             error = null;
@@ -278,10 +250,10 @@ namespace PlcLibrary.Modbus
                 return false;
             }
 
-            if (kind == ModbusValueKind.String)
+            if (kind == TypeCode.String)
                 return TryEncodeString(value, stringLength, byteOrder, destination, out error);
 
-            if (kind == ModbusValueKind.Boolean)
+            if (kind == TypeCode.Boolean)
             {
                 if (destination.Length < 1)
                 {
@@ -306,34 +278,34 @@ namespace PlcLibrary.Modbus
             Span<byte> valueBytes = stackalloc byte[8];
             switch (kind)
             {
-                case ModbusValueKind.UInt16:
-                case ModbusValueKind.Int16:
+                case TypeCode.UInt16:
+                case TypeCode.Int16:
                 {
                     if (!TryToUInt64(value, out var raw, out error)) return false;
                     BinaryPrimitives.WriteUInt16BigEndian(valueBytes, unchecked((ushort)raw));
                     break;
                 }
-                case ModbusValueKind.UInt32:
-                case ModbusValueKind.Int32:
+                case TypeCode.UInt32:
+                case TypeCode.Int32:
                 {
                     if (!TryToUInt64(value, out var raw, out error)) return false;
                     BinaryPrimitives.WriteUInt32BigEndian(valueBytes, unchecked((uint)raw));
                     break;
                 }
-                case ModbusValueKind.UInt64:
-                case ModbusValueKind.Int64:
+                case TypeCode.UInt64:
+                case TypeCode.Int64:
                 {
                     if (!TryToUInt64(value, out var raw, out error)) return false;
                     BinaryPrimitives.WriteUInt64BigEndian(valueBytes, raw);
                     break;
                 }
-                case ModbusValueKind.Single:
+                case TypeCode.Single:
                 {
                     if (!TryToSingle(value, out var single, out error)) return false;
                     BinaryPrimitives.WriteSingleBigEndian(valueBytes, single);
                     break;
                 }
-                case ModbusValueKind.Double:
+                case TypeCode.Double:
                 {
                     if (!TryToDouble(value, out var dbl, out error)) return false;
                     BinaryPrimitives.WriteDoubleBigEndian(valueBytes, dbl);

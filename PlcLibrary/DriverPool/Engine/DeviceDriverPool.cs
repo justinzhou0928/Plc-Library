@@ -21,27 +21,31 @@ namespace PlcLibrary.DriverPool.Engine
 {
     internal sealed class DeviceDriverPool : IDeviceAccessor, IAsyncDisposable
     {
+        private static readonly TimeSpan DisconnectTimeout = TimeSpan.FromSeconds(2);
+
+        /// <summary>Polly 超时之后的硬兜底宽限；测试可缩短。</summary>
+        internal TimeSpan HardTimeoutGrace { get; set; } = TimeSpan.FromSeconds(2);
+
         private readonly IReadOnlyDictionary<string, IDriverFactory> _factoriesByProtocol;
         private readonly ConcurrentDictionary<string, Lazy<DeviceSharedPool>> _pools = new();
         private readonly PoolOptions _options;
         private readonly ILoggerFactory _loggerFactory;
-        private readonly ManagedResiliencePipelineRegistry _pipelineRegistry;
         private readonly ResiliencePipeline _ioResilience;
-        private readonly System.Threading.Timer? _cleanupTimer;
+        private readonly CancellationTokenSource? _cleanupCts;
+        private readonly Task? _cleanupTask;
         private int _disposed;
 
-        private static readonly TimeSpan CleanupPeriod = TimeSpan.FromSeconds(60);
+        private const int CleanupPeriodSeconds = 60;
+        private static readonly TimeSpan CleanupPeriod = TimeSpan.FromSeconds(CleanupPeriodSeconds);
 
         public DeviceDriverPool(
             IOptions<PoolOptions> options,
             IEnumerable<IDriverFactory> factories,
-            ILoggerFactory loggerFactory,
-            ManagedResiliencePipelineRegistry pipelineRegistry)
+            ILoggerFactory loggerFactory)
         {
             _factoriesByProtocol = factories.ToDictionary(f => f.ProtocolDriverName);
             _options = options.Value;
             _loggerFactory = loggerFactory;
-            _pipelineRegistry = pipelineRegistry;
             _ioResilience = new ResiliencePipelineBuilder()
                 .AddRetry(new RetryStrategyOptions
                 {
@@ -56,8 +60,10 @@ namespace PlcLibrary.DriverPool.Engine
 
             // 空置池自动回收：长期热更新增删设备不泄漏连接与弹性管线
             if (_options.PoolIdleTimeout > TimeSpan.Zero)
-                _cleanupTimer = new System.Threading.Timer(
-                    _ => _ = CleanupIdlePoolsAsync(), null, CleanupPeriod, CleanupPeriod);
+            {
+                _cleanupCts = new CancellationTokenSource();
+                _cleanupTask = CleanupLoopAsync(_cleanupCts.Token);
+            }
         }
 
         public async Task<DriverResult[]> ReadAsync(
@@ -69,11 +75,15 @@ namespace PlcLibrary.DriverPool.Engine
             activity?.SetTag("point.count", points.Length);
 
             var driver = await AcquireAsync(device, ct).ConfigureAwait(false);
+            var discard = false;
             try
             {
                 var sw = Stopwatch.StartNew();
                 var results = await _ioResilience.ExecuteAsync(
-                    async token => await driver.ReadAsync(points, token).ConfigureAwait(false), ct).ConfigureAwait(false);
+                        async token => await driver.ReadAsync(points, token).ConfigureAwait(false), ct)
+                    .AsTask()
+                    .WaitAsync(HardTimeout, ct)
+                    .ConfigureAwait(false);
                 sw.Stop();
                 PlcMetrics.ReadsTotal.Add(results.Length, new TagList
                 {
@@ -87,12 +97,24 @@ namespace PlcLibrary.DriverPool.Engine
                 });
                 return results;
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException)
+            {
+                discard = ct.IsCancellationRequested;
+                throw;
+            }
             catch (TimeoutRejectedException)
             {
-                // IO 超时：底层连接状态未知（可能有半读响应残留），强制断开，
-                // 下次获取时走重连路径，避免复用状态未知的连接导致串流/脏数据
+                // IO 超时：底层连接状态未知（可能有半读响应残留），强制断开并丢弃，
+                // 下次获取时走重连/新建路径，避免复用状态未知的连接导致串流/脏数据
+                discard = true;
                 await TryDisconnectAsync(driver).ConfigureAwait(false);
+                PlcMetrics.ReadErrors.Add(1, new TagList { { "device.id", device.Id }, { "device.protocol", device.Protocol } });
+                throw;
+            }
+            catch (TimeoutException)
+            {
+                // Polly 超时也杀不掉的底层调用：WaitAsync 硬上限兜底，直接丢弃驱动
+                discard = true;
                 PlcMetrics.ReadErrors.Add(1, new TagList { { "device.id", device.Id }, { "device.protocol", device.Protocol } });
                 throw;
             }
@@ -101,7 +123,7 @@ namespace PlcLibrary.DriverPool.Engine
                 PlcMetrics.ReadErrors.Add(1, new TagList { { "device.id", device.Id }, { "device.protocol", device.Protocol } });
                 throw;
             }
-            finally { Return(driver, device); }
+            finally { Return(driver, device, discard); }
         }
 
         public async Task<DriverResult[]> WriteAsync(
@@ -113,10 +135,14 @@ namespace PlcLibrary.DriverPool.Engine
             activity?.SetTag("point.count", values.Count);
 
             var driver = await AcquireAsync(device, ct).ConfigureAwait(false);
+            var discard = false;
             try
             {
                 var results = await _ioResilience.ExecuteAsync(
-                    async token => await driver.WriteAsync(values, token).ConfigureAwait(false), ct).ConfigureAwait(false);
+                        async token => await driver.WriteAsync(values, token).ConfigureAwait(false), ct)
+                    .AsTask()
+                    .WaitAsync(HardTimeout, ct)
+                    .ConfigureAwait(false);
                 PlcMetrics.WriteOperations.Add(1, new TagList
                 {
                     { "device.id", device.Id },
@@ -124,22 +150,47 @@ namespace PlcLibrary.DriverPool.Engine
                 });
                 return results;
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException)
+            {
+                discard = ct.IsCancellationRequested;
+                throw;
+            }
             catch (TimeoutRejectedException)
             {
+                discard = true;
                 await TryDisconnectAsync(driver).ConfigureAwait(false);
                 throw;
             }
-            finally { Return(driver, device); }
+            catch (TimeoutException)
+            {
+                discard = true;
+                throw;
+            }
+            finally { Return(driver, device, discard); }
         }
 
-        public ValueTask<IProtocolDriver> AcquireAsync(DeviceConfiguration device, CancellationToken ct = default)
-            => GetOrCreatePool(device).AcquireAsync(ct);
+        private TimeSpan HardTimeout => _options.OperationTimeout + HardTimeoutGrace;
 
-        public void Return(IProtocolDriver driver, DeviceConfiguration device)
+        public async ValueTask<IProtocolDriver> AcquireAsync(DeviceConfiguration device, CancellationToken ct = default)
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                var pool = GetOrCreatePool(device);
+                try
+                {
+                    return await pool.AcquireAsync(ct).ConfigureAwait(false);
+                }
+                catch (PoolRecycledException) when (attempt == 0)
+                {
+                    // 池刚被空闲回收：重新 GetOrCreatePool（会创建新池）后重试一次
+                }
+            }
+        }
+
+        public void Return(IProtocolDriver driver, DeviceConfiguration device, bool discard = false)
         {
             if (TryGetPool(device, out var pool))
-                pool.Return(driver);
+                pool.Return(driver, discard);
             else
                 _ = DisposeDriverAsync(driver);
         }
@@ -152,21 +203,50 @@ namespace PlcLibrary.DriverPool.Engine
 
         private static async Task TryDisconnectAsync(IProtocolDriver driver)
         {
-            try { await driver.DisconnectAsync().ConfigureAwait(false); }
+            try
+            {
+                await driver.DisconnectAsync()
+                    .WaitAsync(DisconnectTimeout)
+                    .ConfigureAwait(false);
+            }
             catch { }
         }
 
         public async ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            _cleanupTimer?.Dispose();
+
+            _cleanupCts?.Cancel();
+            if (_cleanupTask is not null)
+            {
+                try { await _cleanupTask.ConfigureAwait(false); }
+                catch { }
+            }
+            _cleanupCts?.Dispose();
+
             foreach (var (_, lazy) in _pools)
             {
                 if (lazy.IsValueCreated)
                     await lazy.Value.DisposeAsync().ConfigureAwait(false);
             }
             _pools.Clear();
-            _pipelineRegistry.Clear();
+        }
+
+        private async Task CleanupLoopAsync(CancellationToken ct)
+        {
+            using var timer = new PeriodicTimer(CleanupPeriod);
+            try
+            {
+                while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+                {
+                    try { await CleanupIdlePoolsAsync().ConfigureAwait(false); }
+                    catch (Exception ex)
+                    {
+                        PoolLog.LogPoolCleanupFailed(_loggerFactory.CreateLogger<DeviceDriverPool>(), ex);
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
         }
 
         /// <summary>回收空置超过 PoolIdleTimeout 的连接池及其弹性管线（由定时器周期调用，也可测试直接调用）。</summary>
@@ -180,11 +260,17 @@ namespace PlcLibrary.DriverPool.Engine
                 var pool = lazy.Value;
                 if (!pool.IsIdleBeyond(_options.PoolIdleTimeout)) continue;
 
+                // 先原子进入「回收中」：有并发借用时放弃本轮回，避免与 Acquire 竞争
+                if (!pool.TryBeginRecycle()) continue;
+
                 if (_pools.TryRemove(key, out _))
                 {
                     await pool.DisposeAsync().ConfigureAwait(false);
-                    _pipelineRegistry.TryRemove(ResiliencePipelineKeys.Pool(pool.Device));
                     PoolLog.LogPoolRecycled(_loggerFactory.CreateLogger<DeviceDriverPool>(), pool.Device.Id);
+                }
+                else
+                {
+                    pool.CancelRecycle();
                 }
             }
         }
@@ -198,7 +284,7 @@ namespace PlcLibrary.DriverPool.Engine
             return _pools.GetOrAdd(PoolKey(device),
                 _ => new Lazy<DeviceSharedPool>(
                     () => new DeviceSharedPool(
-                        _loggerFactory.CreateLogger<DeviceSharedPool>(), device, factory, _options, _pipelineRegistry),
+                        _loggerFactory.CreateLogger<DeviceSharedPool>(), device, factory, _options),
                     LazyThreadSafetyMode.ExecutionAndPublication)).Value;
         }
 

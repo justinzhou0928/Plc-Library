@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using PlcLibrary.DriverDomain;
 using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Enums;
@@ -168,78 +168,90 @@ namespace PlcLibrary.S7
             var plc = GetPlcOrThrow();
             if (values.Count == 0) return [];
 
-            // string 点位必须走批量写（DataItem 支持 S7String 格式），即使只有一个点位
-            if (values.Count > 1 || values.Keys.Any(IsStringPoint))
+            var entries = values.ToList();
+            var results = new DriverResult[entries.Count];
+            var items = new List<(int Index, string Address, DataItem Item)>(entries.Count);
+
+            // 先逐点构造 DataItem：非法地址只影响自身，且不进入批量写（避免整批失败）
+            for (var i = 0; i < entries.Count; i++)
             {
                 try
                 {
-                    return await WriteBatchAsync(plc, values).ConfigureAwait(false);
+                    var item = CreateDataItem(entries[i].Key);
+                    item.Value = entries[i].Value;
+                    items.Add((i, entries[i].Key.Address, item));
                 }
-                catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
-                    S7Log.LogBatchWriteFallback(logger, ex);
+                    results[i] = DriverResult.Bad(entries[i].Key.Address, QualityCode.BadConfigError, ex.Message);
                 }
             }
 
-            return await WritePointsIndividuallyAsync(plc, values, ct).ConfigureAwait(false);
-        }
+            if (items.Count == 0) return results;
 
-        private static async Task<DriverResult[]> WriteBatchAsync(
-            Plc plc, IReadOnlyDictionary<TagPointConfiguration, object> values)
-        {
-            var count = values.Count;
-            var addresses = new string[count];
-            var dataItems = new DataItem[count];
-            var idx = 0;
-            foreach (var kv in values)
+            // 单点且非 string：直接逐点写（可取消），无需承担批量失败回退的双写风险
+            if (items.Count == 1 && !IsStringPoint(entries[items[0].Index].Key))
             {
-                addresses[idx] = kv.Key.Address;
-                var item = CreateDataItem(kv.Key);
-                item.Value = kv.Value;
-                dataItems[idx++] = item;
+                await WriteOneAsync(plc, items[0].Index, items[0].Address, entries[items[0].Index].Value, results, ct)
+                    .ConfigureAwait(false);
+                return results;
             }
 
-            await plc.WriteAsync(dataItems).ConfigureAwait(false);
-
-            var dr = new DriverResult[count];
-            for (var i = 0; i < count; i++)
-                dr[i] = DriverResult.Good(addresses[i], null);
-            return dr;
-        }
-
-        private async Task<DriverResult[]> WritePointsIndividuallyAsync(
-            Plc plc, IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct)
-        {
-            var results = new DriverResult[values.Count];
-            var index = 0;
-            foreach (var kvp in values)
+            try
             {
-                ct.ThrowIfCancellationRequested();
-                try
-                {
-                    if (TryParseStringAddress(kvp.Key.Address, out var db, out var start, out var len))
-                    {
-                        // string 逐点写：S7String.ToByteArray 生成带 2 字节头的字节流，再按字节写入
-                        var bytes = S7String.ToByteArray(Convert.ToString(kvp.Value), len);
-                        await plc.WriteBytesAsync(DataType.DataBlock, db, start, bytes, ct).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        await plc.WriteAsync(kvp.Key.Address, kvp.Value, ct).ConfigureAwait(false);
-                    }
-                    results[index] = DriverResult.Good(kvp.Key.Address, null);
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    S7Log.LogWritePointFailed(logger, ex, kvp.Key.Address);
-                    MarkFaultedIfTransport(ex);
-                    results[index] = DriverResult.Bad(kvp.Key.Address, QualityCode.BadCommFailure, ex.Message);
-                }
-                index++;
+                await plc.WriteAsync(items.Select(x => x.Item).ToArray()).ConfigureAwait(false);
+                foreach (var (index, address, _) in items)
+                    results[index] = DriverResult.Good(address, null);
+                return results;
             }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                S7Log.LogBatchWriteFallback(logger, ex);
+                MarkFaultedIfTransport(ex);
+
+                // 传输级故障：不再逐点重写（连接已不可用，重试只会放大延迟且可能重复写）
+                if (TransportFailureDetector.IsTransportFailure(ex))
+                {
+                    foreach (var (index, address, _) in items)
+                        results[index] = DriverResult.Bad(address, QualityCode.BadCommFailure, ex.Message);
+                    return results;
+                }
+            }
+
+            // 协议/数据级失败：逐点回退以隔离坏点位。S7 为绝对值写入，重复写同值幂等。
+            foreach (var (index, address, _) in items)
+                await WriteOneAsync(plc, index, address, entries[index].Value, results, ct).ConfigureAwait(false);
+
             return results;
+        }
+
+        private async Task WriteOneAsync(
+            Plc plc, int index, string address, object value, DriverResult[] results, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                if (TryParseStringAddress(address, out var db, out var start, out var len))
+                {
+                    // string 逐点写：S7String.ToByteArray 生成带 2 字节头的字节流，再按字节写入
+                    var bytes = S7String.ToByteArray(Convert.ToString(value), len);
+                    await plc.WriteBytesAsync(DataType.DataBlock, db, start, bytes, ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    await plc.WriteAsync(address, value, ct).ConfigureAwait(false);
+                }
+
+                results[index] = DriverResult.Good(address, null);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                S7Log.LogWritePointFailed(logger, ex, address);
+                MarkFaultedIfTransport(ex);
+                results[index] = DriverResult.Bad(address, QualityCode.BadCommFailure, ex.Message);
+            }
         }
 
         public async ValueTask DisposeAsync()
