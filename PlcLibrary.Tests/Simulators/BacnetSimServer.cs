@@ -34,9 +34,6 @@ public sealed class BacnetSimServer : IAsyncDisposable
     private readonly object _gate = new();
     private readonly Dictionary<(BacnetObjectTypes Type, uint Instance), SimObject> _objects;
     private readonly BacnetClient _client;
-    private readonly UdpClient _broadcastListener;
-    private readonly CancellationTokenSource _cts = new();
-    private readonly Task _broadcastLoop;
     private int _whoIsRequestCount;
     private int _disposed;
 
@@ -58,29 +55,30 @@ public sealed class BacnetSimServer : IAsyncDisposable
 
         for (var attempt = 0; ; attempt++)
         {
-            var listener = BindBroadcastListener();
-            var port = ((IPEndPoint)listener.Client.LocalEndPoint!).Port;
+            var port = GetFreeUdpPort();
             BacnetClient? client = null;
             try
             {
+                // 使用 SDK 的 shared + exclusive 端口模式（useExclusivePort:false）：
+                // 共享 socket 收广播/WhoIs，独占 socket 收 127.0.0.2:port 的单播。
+                // 不要用 useExclusivePort:true —— 它在 Linux 上会设置 ExclusiveAddressUse，
+                // 与驱动/其它测试进程的 0.0.0.0:port 共享 socket 冲突（Address already in use）。
                 var transport = new BacnetIpUdpProtocolTransport(
-                    port, useExclusivePort: true, localEndpointIp: LoopbackAddress);
+                    port, port, localEndpointIp: LoopbackAddress);
                 client = new BacnetClient(transport) { Timeout = DiscoveryTimeoutMs };
+                client.OnWhoIs += HandleWhoIs;
                 client.OnReadPropertyMultipleRequest += HandleReadPropertyMultiple;
                 client.OnReadPropertyRequest += HandleReadProperty;
                 client.OnWritePropertyRequest += HandleWriteProperty;
                 client.Start();
 
                 _client = client;
-                _broadcastListener = listener;
                 Port = port;
-                _broadcastLoop = Task.Run(() => BroadcastLoopAsync(_cts.Token));
                 return;
             }
             catch (Exception ex)
             {
                 client?.Dispose();
-                listener.Dispose();
                 if (attempt >= 19)
                     throw new InvalidOperationException("Unable to start the BACnet simulator on a free loopback port.", ex);
             }
@@ -148,33 +146,26 @@ public sealed class BacnetSimServer : IAsyncDisposable
         [(BacnetObjectTypes.OBJECT_BINARY_VALUE, 3)] = new(new BacnetValue(BacnetApplicationTags.BACNET_APPLICATION_TAG_BOOLEAN, true)),
     };
 
-    private static UdpClient BindBroadcastListener()
+    private static int GetFreeUdpPort()
     {
-        for (var attempt = 0; attempt < 20; attempt++)
-        {
-            var listener = new UdpClient { ExclusiveAddressUse = false };
-            listener.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            listener.Client.Bind(new IPEndPoint(IPAddress.Any, 0));
-            var port = ((IPEndPoint)listener.Client.LocalEndPoint!).Port;
-            if (port < 65535 && IsUdpPortFree(IPAddress.Loopback, port + 1))
-                return listener;
-
-            listener.Dispose();
-        }
-
-        throw new InvalidOperationException("Unable to allocate a free UDP port pair for the BACnet simulator.");
+        using var probe = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
+        return ((IPEndPoint)probe.Client.LocalEndPoint!).Port;
     }
 
-    private static bool IsUdpPortFree(IPAddress address, int port)
+    private void HandleWhoIs(BacnetClient sender, BacnetAddress adr, int lowLimit, int highLimit)
     {
+        Interlocked.Increment(ref _whoIsRequestCount);
+
+        if (lowLimit >= 0 && DeviceInstance < (uint)lowLimit) return;
+        if (highLimit >= 0 && DeviceInstance > (uint)highLimit) return;
+
         try
         {
-            using var probe = new UdpClient(new IPEndPoint(address, port));
-            return true;
+            sender.Iam(DeviceInstance, BacnetSegmentations.SEGMENTATION_NONE, adr);
         }
-        catch (SocketException)
+        catch
         {
-            return false;
+            // IAm 发送失败只影响发现测试；让测试自己超时失败。
         }
     }
 
@@ -297,111 +288,14 @@ public sealed class BacnetSimServer : IAsyncDisposable
             },
         });
 
-    private async Task BroadcastLoopAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            UdpReceiveResult received;
-            try
-            {
-                received = await _broadcastListener.ReceiveAsync(ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
-            }
-            catch (SocketException) when (ct.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (SocketException)
-            {
-                continue;
-            }
-
-            if (!IsWhoIs(received.Buffer))
-                continue;
-
-            Interlocked.Increment(ref _whoIsRequestCount);
-            var remote = received.RemoteEndPoint;
-            var receiver = new BacnetAddress(BacnetAddressTypes.IP, $"{remote.Address}:{remote.Port}");
-            try
-            {
-                _client.Iam(DeviceInstance, BacnetSegmentations.SEGMENTATION_NONE, receiver);
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
-            }
-            catch (Exception)
-            {
-                // 回 IAm 失败不会影响之后的 Read/Write 测试；让发现测试自己超时失败。
-            }
-        }
-    }
-
-    /// <summary>
-    /// 判断 UDP 报文是否为 WhoIs。接受 BVLC Original-Broadcast（0x0B）与 Original-Unicast（0x0A），
-    /// 并按 NPDU 控制位跳过 DNET/DADR/hop-count 与 SNET/SADR 字段。
-    /// </summary>
-    private static bool IsWhoIs(byte[] buffer)
-    {
-        if (buffer.Length < 6 || buffer[0] != 0x81 || (buffer[1] != 0x0A && buffer[1] != 0x0B))
-            return false;
-
-        var offset = 4;
-        if (buffer[offset] != 0x01)
-            return false;
-
-        var control = buffer[offset + 1];
-        offset += 2;
-
-        if ((control & 0x20) != 0)
-        {
-            if (offset + 3 > buffer.Length)
-                return false;
-
-            var destinationLength = buffer[offset + 2];
-            offset += 3 + destinationLength + 1; // DNET(2) + DLEN(1) + DADR + hop count(1)
-        }
-
-        if ((control & 0x08) != 0)
-        {
-            if (offset + 3 > buffer.Length)
-                return false;
-
-            var sourceLength = buffer[offset + 2];
-            offset += 3 + sourceLength; // SNET(2) + SLEN(1) + SADR
-        }
-
-        return offset + 1 < buffer.Length
-            && buffer[offset] == 0x10
-            && buffer[offset + 1] == 0x08;
-    }
-
     /// <inheritdoc />
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
-            return;
-
-        _cts.Cancel();
-        _broadcastListener.Dispose();
-        try
-        {
-            await _broadcastLoop.ConfigureAwait(false);
-        }
-        catch
-        {
-            // 关闭阶段的异常无需传播。
-        }
+            return default;
 
         _client.Dispose();
-        _cts.Dispose();
+        return default;
     }
 
     private sealed class SimObject(BacnetValue presentValue)
