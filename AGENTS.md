@@ -44,6 +44,7 @@ dotnet pack PlcLibrary.slnx -c Release -o ./artifacts/pkg
 | `README.md` | 使用者文档（安装/配置/API/行为） |
 | `DEVELOPMENT.md` | 架构、设计决策、驱动开发、测试策略、已知限制 |
 | `CHANGELOG.md` | 版本历史（含不兼容变更） |
+| `docs/RELEASING.md` | 发布提交、CHANGELOG、annotated tag 的格式规范 |
 | `docs/ASSESSMENT-2026-11.md` | **带日期的评估快照**，不是当前行为依据 |
 | `.github/workflows/ci.yml` | CI（Ubuntu，restore/build/test/pack） |
 
@@ -79,6 +80,7 @@ dotnet pack PlcLibrary.slnx -c Release -o ./artifacts/pkg
 | `DEVELOPMENT.md` | 架构、生命周期、设计决策、驱动开发、测试策略、技术债 | 重复 README 的配置字段大全 |
 | `AGENTS.md` | 规则、命令、仓库地图、维护约定 | 复制大段实现说明 |
 | `CHANGELOG.md` | 每个版本的新增/修复/变更/测试 | 未发布的冗长过程记录 |
+| `docs/RELEASING.md` | 发布步骤、提交格式、annotated tag 模板与检查清单 | 具体版本的历史变更明细 |
 | `docs/ASSESSMENT-*.md` | 某次评估的快照、证据、评分、未修复项 | 当作"当前行为"依据 |
 
 规则：
@@ -89,6 +91,7 @@ dotnet pack PlcLibrary.slnx -c Release -o ./artifacts/pkg
 4. 修复完成后，删除 README/DEVELOPMENT 中对应的"已知限制/待处理"条目；不要把已修项留在限制列表。
 5. 新评估另建 `docs/ASSESSMENT-YYYY-MM.md`，旧文件保留并标注"历史快照"。
 6. 提交前检查：无过期数字（测试数、版本）、无失效链接、无"已废弃但仍在正文"的内容。
+7. 发布 tag 必须 annotated，message 含版本/日期/摘要/分类变更/验证结果，禁止 lightweight tag；具体格式见 [docs/RELEASING.md](./docs/RELEASING.md)。
 
 ## 当前限制
 

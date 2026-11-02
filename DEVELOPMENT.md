@@ -2,7 +2,7 @@
 
 面向贡献者与维护者：架构、运行时、驱动开发、批量读设计、测试策略与已知限制。
 
-> 使用者文档见 [README.md](./README.md)；AI 代理规则见 [AGENTS.md](./AGENTS.md)；历史评估快照见 [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md)。
+> 使用者文档见 [README.md](./README.md)；AI 代理规则见 [AGENTS.md](./AGENTS.md)；发布与 tag 规范见 [docs/RELEASING.md](./docs/RELEASING.md)；历史评估快照见 [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md)。
 
 ## 架构总览
 
