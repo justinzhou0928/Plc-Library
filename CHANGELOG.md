@@ -1,8 +1,18 @@
-﻿# Changelog
+# Changelog
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]
+
+## [1.3.1] - 2026-11-02
+
+### 修复
+
+- **Linux CI 下 BACnet 测试模拟器端口冲突**：模拟器改用 SDK 的 shared + exclusive UDP 端口模式（shared `0.0.0.0:Port` + exclusive `127.0.0.2:Port`），不再用 `useExclusivePort:true`，避免 Ubuntu 上 `Address already in use`；11 个 BACnet 模拟器用例在 Ubuntu 通过
+
+### 构建
+
+- CI 测试失败时上传 TRX，并把失败测试名/错误写入 GitHub annotation，便于定位平台差异
 
 ## [1.3.0] - 2026-11-02
 

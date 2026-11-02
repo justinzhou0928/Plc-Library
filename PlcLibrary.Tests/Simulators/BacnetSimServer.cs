@@ -15,14 +15,12 @@ namespace PlcLibrary.Tests.Simulators;
 /// 只实现验证驱动所需的最小对象集：AV:1、AV:2、AI:0、BV:3。
 /// </summary>
 /// <remarks>
-/// 拓扑说明（Windows 回环）：
-/// 驱动把配置里的 Port 用成本地共享端口（绑定 0.0.0.0:Port；LocalEndpointIp 只作用于
-/// Port+1 那个独占套接字）。远程设备端口则来自 host 字符串里的端口，因为驱动把 Port
-/// 传给了 BacnetAddress 的 network 参数（见 CreateConnectionString 的说明）。
-/// 模拟器因此绑定 127.0.0.2:Port 的独占套接字；驱动虽然也绑了通配的 0.0.0.0:Port，
-/// 但 Windows 会把目标为 127.0.0.2:Port 的单播交给更具体的那个套接字。
-/// 广播 WhoIs 不会送到独占套接字，所以另开一个 0.0.0.0:Port 的普通 UdpClient
-/// 只负责接收广播，并让模拟器从 127.0.0.2:Port 回 IAm。
+/// 拓扑说明（Windows/Linux 通用）：
+/// 模拟器与驱动都使用 SDK 的 shared + exclusive UDP 端口模式：shared 套接字绑定
+/// 0.0.0.0:Port 收 WhoIs/广播，exclusive 套接字绑定各自回环地址（模拟器 127.0.0.2、
+/// 驱动 localendpointip=127.0.0.1）收单播。共享端口依赖 SO_REUSEADDR，因此不要用
+/// useExclusivePort:true（它在 Linux 上会设置 ExclusiveAddressUse，与共享端口冲突）。
+/// WhoIs 由 SDK 在 shared socket 上触发 OnWhoIs，模拟器从 exclusive socket 回 IAm。
 /// </remarks>
 public sealed class BacnetSimServer : IAsyncDisposable
 {
@@ -110,15 +108,13 @@ public sealed class BacnetSimServer : IAsyncDisposable
     public bool OmitUnknownObjects { get; }
 
     /// <summary>
-    /// 生成驱动连接串。注意：端口必须写进 host。驱动把 Port 传给
-    /// <see cref="BacnetAddress"/> 的 network 参数而非端口，远程端口实际取 host 中的端口
-    /// （缺省 47808）；不写进 host 时驱动会连到 47808 而不是本模拟器的临时端口。
+    /// 生成驱动连接串。port 同时用于本地共享/独占绑定与远程目标端口（host 不含端口时
+    /// 驱动用 port 拼目标地址），localendpointip 让驱动独占套接字绑定 127.0.0.1。
     /// </summary>
     public string CreateConnectionString(uint deviceInstance = 0)
     {
         var builder = new StringBuilder();
-        // host 只写 IP，端口由 port 字段表达：驱动必须把端口编码进 BacnetAddress 的地址字符串，
-        // 而不是传给 network 参数（回归点）。
+        // host 只写 IP，端口由 port 字段表达：驱动会把它编码进 BacnetAddress 地址。
         builder.Append("host:").Append(Host);
         builder.Append(";port:").Append(Port);
         builder.Append(";localendpointip:127.0.0.1");
