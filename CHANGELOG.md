@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-11-02
+
+### 构建
+
+- **NuGet.org 发布改为按需执行**：只有配置 `NUGET` secret 时才执行 `dotnet nuget push`，未配置时给出 notice 并跳过；避免 tag CI 因缺失发布密钥失败。GitHub Packages 发布保持自动执行
+
 ## [1.3.1] - 2026-11-02
 
 ### 修复

@@ -83,6 +83,8 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    env:
+      NUGET_API_KEY: ${{ secrets.NUGET }}
     steps:
     - uses: actions/download-artifact@v4
       with:
@@ -93,8 +95,14 @@ jobs:
       with:
         dotnet-version: '8.0.x'
 
-    - run: >
+    - name: Publish to NuGet.org
+      if: env.NUGET_API_KEY != ''
+      run: >
         dotnet nuget push ./nupkgs/*.nupkg
         --source https://api.nuget.org/v3/index.json
-        --api-key ${{ secrets.NUGET }}
+        --api-key "$NUGET_API_KEY"
         --skip-duplicate
+
+    - name: NuGet secret not configured
+      if: env.NUGET_API_KEY == ''
+      run: echo "::notice::NUGET secret is not configured; NuGet.org publish skipped."
