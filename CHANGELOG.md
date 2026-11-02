@@ -1,8 +1,14 @@
-# Changelog
+﻿# Changelog
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]
+
+## [1.3.4] - 2026-11-02
+
+### 构建
+
+- CI 的可选 NuGet.org 发布失败改为 warning 输出，不再产生 failure annotation；GitHub Packages 发布保持成功
 
 ## [1.3.3] - 2026-11-02
 
