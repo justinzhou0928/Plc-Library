@@ -304,7 +304,7 @@ namespace PlcLibrary.Omron
 
             try
             {
-                var bytes = await Task.Run(() => client.Read(startAddress, (ushort)wordCount)).ConfigureAwait(false);
+                var bytes = await client.ReadAsync(startAddress, (ushort)wordCount).ConfigureAwait(false);
                 var transform = client.Transform;
 
                 foreach (var plan in group)
@@ -334,7 +334,7 @@ namespace PlcLibrary.Omron
 
             try
             {
-                var bits = await Task.Run(() => client.ReadBit(startAddress, (ushort)count)).ConfigureAwait(false);
+                var bits = await client.ReadBitAsync(startAddress, (ushort)count).ConfigureAwait(false);
 
                 foreach (var plan in group)
                 {

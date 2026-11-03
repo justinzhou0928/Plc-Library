@@ -44,7 +44,7 @@ namespace PlcLibrary.DriverDomain.Parser
             => TryResolve(dataType, out var type) ? type : typeof(int);
 
         /// <summary>
-        /// 严格解析数据类型名称或别名。空值返回 true 且 <paramref name="type"/> 为 <see cref="int"/>（兼容既有语义）；
+        /// 严格解析数据类型名称或别名，空值返回 true 且 <paramref name="type"/> 为 <see cref="int"/>
         /// 未知名称返回 false，调用方应将其视为配置错误，避免静默回退到 int。
         /// </summary>
         public static bool TryResolve(string? dataType, out Type type)

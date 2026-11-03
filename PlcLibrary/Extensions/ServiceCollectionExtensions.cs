@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using PlcLibrary.Application;
 using PlcLibrary.Controller.Engine;
 using PlcLibrary.Controller.Interfaces;
 using PlcLibrary.DriverDomain.Attributes;
@@ -52,6 +53,12 @@ namespace PlcLibrary.Extensions
             services.AddSingleton<TaskScheduler>();
             services.AddSingleton<IDeviceScheduler>(sp => sp.GetRequiredService<TaskScheduler>());
             services.AddHostedService<TaskSchedulerHost>();
+
+            // 应用只依赖 IPlcGateway；scheduler/accessor/browser 留在内部。
+            services.AddSingleton<IPlcGateway>(sp => new PlcGateway(
+                sp.GetRequiredService<IDeviceScheduler>(),
+                sp.GetRequiredService<IDeviceAccessor>(),
+                sp.GetRequiredService<IDeviceBrowser>()));
 
             return services;
         }

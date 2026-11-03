@@ -246,8 +246,6 @@ namespace PlcLibrary.S7
             }
         }
 
-        // ─── S7 string 支持 ───
-
         /// <summary>
         /// 解析 S7 STRING 地址：<c>DB{db}.DBB{startByte}.{length}</c>（如 <c>DB6000.DBB504.100</c>）。
         /// 注意：s7netplus 的 <see cref="DataItem.FromAddress"/> 不解析长度后缀（官方注释确认），

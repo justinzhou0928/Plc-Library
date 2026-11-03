@@ -2,6 +2,7 @@
 
 工业 PLC 数据采集库：连接池、热更新调度、数据管道、实时值监控与可观测性，一个宿主进程接入多种协议。
 
+- 应用统一入口 `IPlcGateway`：配置/健康、主动读写、可选标签浏览；内部调度/读写/浏览接口不对外
 - 协议无关驱动接口：新增协议只需实现 `IProtocolDriver` + `AddDriver<T>()`
 - 连接池 + Polly 弹性策略（连接级重试/超时/熔断；IO 级重试/超时/熔断）
 - 设备配置热更新，差量 reconcile；推送型设备失败自动重建
@@ -67,7 +68,7 @@ dotnet add package PlcLibrary.Monitor
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using PlcLibrary.Controller.Interfaces;
+using PlcLibrary.Application;
 using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.Extensions;
 using PlcLibrary.General.Configuration;
@@ -99,7 +100,7 @@ builder.Services
     .AddSingleton<IDataHandler, ConsoleHandler>();
 
 var host = builder.Build();
-await host.Services.GetRequiredService<IDeviceScheduler>().ApplyDevicesAsync(devices);
+await host.Services.GetRequiredService<IPlcGateway>().ApplyDevicesAsync(devices);
 await host.RunAsync();
 
 internal sealed class ConsoleHandler(ILogger<ConsoleHandler> logger) : IDataHandler
@@ -140,13 +141,13 @@ builder.Services.Configure<PipelineOptions>(builder.Configuration.GetSection("Pi
 ```
 
 ```csharp
-internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler scheduler) : BackgroundService
+internal sealed class DeviceLoader(IConfiguration config, IPlcGateway gateway) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         var devices = config.GetSection("Devices").Get<DeviceConfiguration[]>();
         if (devices is { Length: > 0 })
-            await scheduler.ApplyDevicesAsync(devices, ct);
+            await gateway.ApplyDevicesAsync(devices, ct);
     }
 }
 ```
@@ -504,17 +505,16 @@ rate(plc_pipeline_dropped_total[1m])
 
 | 接口 | 说明 |
 |------|------|
-| `IDeviceScheduler` | 推送设备配置（差量 reconcile）、查询健康状态 |
+| `IPlcGateway` | **应用统一入口**：配置/健康、主动读写、可选标签浏览 |
 | `IDataHandler` | 接收采集结果 |
-| `IDeviceAccessor` | 主动读写设备 |
 | `IProtocolDriver` | 协议驱动实现 |
 | `ProtocolDriverBase<TClient>` | 驱动状态机/重连/`Faulted`/释放基类 |
 | `IPushProtocolDriver` | 推送型驱动（订阅/回调） |
 | `ITagBrowser` | 可选驱动能力：浏览直接子节点（当前 OPC UA 实现） |
-| `IDeviceBrowser` | 设备级浏览访问器（连接池统一管理） |
 | `IDriverFactory` | 驱动工厂（通常由 `AddDriver<T>` 生成） |
-| `IDataPipeline` | 数据管道（一般无需直接使用） |
 | `IPlcMonitor` | 实时值缓存与变化订阅（Monitor 包） |
+
+> 2.0 起 `IDeviceScheduler` / `IDeviceAccessor` / `IDeviceBrowser` / `IDataPipeline` 均为内部实现，不再作为公共 API；应用层使用 `IPlcGateway`。
 
 ### 结果模型
 
@@ -528,10 +528,10 @@ rate(plc_pipeline_dropped_total[1m])
 OPC UA 读和订阅会填充源/服务器时间戳；Modbus/S7/Omron/Mitsubishi/AB/BACnet 等不返回该信息的协议保持 `null`，由上层用 `Timestamp` 作为采集时间。时间戳用于 SCADA 判断数据新鲜度、SOE/历史排序，库只透传，不做业务校时。
 
 ```csharp
-public class MyService(IDeviceAccessor accessor)
+public class MyService(IPlcGateway gateway)
 {
     public async Task ReadDevice(DeviceConfiguration device)
-        => await accessor.ReadAsync(device, device.TagPoints);
+        => await gateway.ReadAsync(device, device.TagPoints);
 
     public async Task WriteDevice(DeviceConfiguration device)
     {
@@ -539,7 +539,7 @@ public class MyService(IDeviceAccessor accessor)
         {
             [device.TagPoints[0]] = 123.45
         };
-        await accessor.WriteAsync(device, points);
+        await gateway.WriteAsync(device, points);
     }
 }
 ```
@@ -547,28 +547,28 @@ public class MyService(IDeviceAccessor accessor)
 ### 标签浏览
 
 ```csharp
-public class TagDiscovery(IDeviceBrowser browser)
+public class TagDiscovery(IPlcGateway gateway)
 {
     public async Task WalkAsync(DeviceConfiguration device, CancellationToken ct)
     {
-        var nodes = await browser.BrowseAsync(device, null, ct); // OPC UA Objects 文件夹
+        var nodes = await gateway.BrowseAsync(device, null, ct); // OPC UA Objects 文件夹
         foreach (var node in nodes)
         {
             Console.WriteLine($"{node.Address} {node.Name} type={node.DataType} writable={node.IsWritable}");
             if (node.IsFolder)
-                await browser.BrowseAsync(device, node.Address, ct); // 只取直接子节点，递归由上层控制
+                await gateway.BrowseAsync(device, node.Address, ct); // 只取直接子节点，递归由上层控制
         }
     }
 }
 ```
 
-`ITagBrowser` 是可选驱动能力，当前由 `OpcUaDriver` 实现；`IDeviceBrowser` 通过连接池借用/归还驱动。不支持浏览的协议抛 `NotSupportedException`。`TagDescriptor` 包含 `Address/Name/DataType/IsWritable/IsFolder/Description`；`DataType` 为协议内置类型名（如 OPC UA `Boolean`/`DateTime`），未知时为 `null`。
+`ITagBrowser` 是可选驱动能力，当前由 `OpcUaDriver` 实现；`IPlcGateway.BrowseAsync` 通过连接池借用/归还驱动。不支持浏览的协议抛 `NotSupportedException`。`TagDescriptor` 包含 `Address/Name/DataType/IsWritable/IsFolder/Description`；`DataType` 为协议内置类型名（如 OPC UA `Boolean`/`DateTime`），未知时为 `null`。
 
 ### 健康状态
 
 ```csharp
-var scheduler = host.Services.GetRequiredService<IDeviceScheduler>();
-var health = await scheduler.GetDeviceHealthAsync();
+var gateway = host.Services.GetRequiredService<IPlcGateway>();
+var health = await gateway.GetHealthAsync();
 
 foreach (var d in health)
     Console.WriteLine($"{d.DeviceId} [{d.Protocol}] {(d.IsRunning ? "OK" : d.Error)}");
@@ -579,11 +579,11 @@ foreach (var d in health)
 ASP.NET Core HealthChecks 适配（宿主实现，约 10 行）：
 
 ```csharp
-public sealed class PlcHealthCheck(IDeviceScheduler scheduler) : IHealthCheck
+public sealed class PlcHealthCheck(IPlcGateway gateway) : IHealthCheck
 {
     public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken ct = default)
     {
-        var health = await scheduler.GetDeviceHealthAsync(ct);
+        var health = await gateway.GetHealthAsync(ct);
         var down = health.Where(d => !d.IsRunning).ToList();
         return down.Count == 0
             ? HealthCheckResult.Healthy($"devices: {health.Count}")
@@ -594,10 +594,6 @@ public sealed class PlcHealthCheck(IDeviceScheduler scheduler) : IHealthCheck
 builder.Services.AddHealthChecks().AddCheck<PlcHealthCheck>("plc");
 app.MapHealthChecks("/healthz");
 ```
-
-### 为什么 OPC UA 订阅不走连接池
-
-轮询驱动按次借用连接；OPC UA 订阅状态（MonitoredItem、发布队列）绑定驱动实例，池化会破坏订阅语义。因此 `PushCollector` 为每台设备创建独立驱动与连接级弹性管线，随采集器释放。详见 [DEVELOPMENT.md](./DEVELOPMENT.md)。
 
 ## 已知限制与后续计划
 

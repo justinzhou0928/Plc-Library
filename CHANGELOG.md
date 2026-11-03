@@ -4,11 +4,14 @@
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-03
+
 ### 新增
 
+- **应用统一入口 `IPlcGateway`**：配置/健康、主动读写、单点读取、标签浏览；应用只注入一个门面，内部仍由 scheduler/accessor/browser 组合
 - `DriverResult.SourceTimestamp` / `DriverResult.ServerTimestamp`：透传协议返回的设备侧/服务器侧时间戳；OPC UA 读与订阅填充，其他协议保持 `null`，`Timestamp` 仍为库采集时间
 - 指标 `plc.points.bad`（按 `device.id`/`quality`）、`plc.reconnects`、`plc.reconnect.failures`，补齐 Bad 质量与重连可观测性
-- 标签浏览：可选驱动接口 `ITagBrowser` + 设备访问器 `IDeviceBrowser`，`OpcUaDriver` 支持浏览 Objects 文件夹/指定 NodeId 的直接子节点，返回 `TagDescriptor`（地址/名称/类型/可写/是否文件夹）
+- 标签浏览：可选驱动接口 `ITagBrowser`，`OpcUaDriver` 支持浏览 Objects 文件夹/指定 NodeId 的直接子节点，返回 `TagDescriptor`（地址/名称/类型/可写/是否文件夹）；应用通过 `IPlcGateway.BrowseAsync` 使用
 - `ProtocolDriverBase<TClient>` 驱动基类：统一 `DriverStatus`/状态锁、客户端取用/分离、`Faulted` 标记、`TryReconnectAsync` 与释放模板；S7/Omron/Mitsubishi/Allen-Bradley/BACnet/OPC UA 已迁移，Modbus 保留专用基类
 
 ### 修复
@@ -20,9 +23,11 @@
 - **连接串值截断/空格丢失**：值支持单/双引号包裹，保留 `;`、冒号和首尾空格；引号内同种引号双写转义；未加引号的值仍 Trim
 - **IO 级无断路器**：`ReadAsync`/`WriteAsync` 增加按设备独立的断路器，坏设备在连续失败后快速失败，不再每周期重试到超时
 - **OPC UA 推送非法地址**：`StartPushingAsync` 对非法 `NodeId` 产出 `BadConfigError`，不再只写日志后静默丢弃
+- **Omron 真异步读**：批量字/位读取改用 `FinsClient.ReadAsync/ReadBitAsync`，不再用 `Task.Run` 包装同步 I/O
 
 ### 变更（不兼容）
 
+- **公共 API 收敛到 `IPlcGateway`**：`IDeviceScheduler`、`IDeviceAccessor`、`IDeviceBrowser`、`IDataPipeline` 改为 internal；应用不再直接注入这些接口，改用 `IPlcGateway` 的 `ApplyDevicesAsync` / `GetHealthAsync` / `ReadAsync` / `WriteAsync` / `ReadTagAsync` / `BrowseAsync`
 - **S7 标量 `DataType` 生效**：配置 `DBW`+`short`、`DBD`+`float` 等类型时按配置解码，不再按地址推断；未配置时保持原行为。依赖 `DBD` 恒为 `uint` 的调用方需检查点位配置；`long`/`ulong` 等无对应 S7.Net 标量 `VarType` 的类型返回 `BadConfigError`
 - **连接串未知键不再静默忽略**：未知键会抛 `InvalidOperationException`，并列出允许键；自定义驱动如使用非属性名键，需通过 `ConnectionStringBinder.Bind<T>(cs, "alias")` 显式声明
 - `IDeviceCollector` 改为 internal：它只由调度器创建/停止，没有公开注册或扩展点，避免实现细节泄漏到公共 API
@@ -31,6 +36,7 @@
 
 - 新增 [docs/SCOPE.md](docs/SCOPE.md)：库职责与 SCADA 职责边界、本轮落地项与剩余补齐优先级
 - README/DEVELOPMENT 同步时间戳、指标、推送心跳与已知限制
+- AGENTS 合并通用 .NET 规范（异步/注释/编码/命名/验证），并精简 README/DEVELOPMENT 与过期注释
 
 ## [1.3.5] - 2026-11-03
 

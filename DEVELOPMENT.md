@@ -26,12 +26,14 @@ flowchart LR
 
 | 层 | 核心类 | 职责 |
 |------|------|------|
-| 应用层 | `IDeviceScheduler`、`IDataHandler`、`IDeviceAccessor` | 下发配置、接收数据、主动读写 |
+| 应用层 | `IPlcGateway`、`IDataHandler` | 下发配置、主动读写、浏览、接收数据 |
 | 调度层 | `TaskScheduler`、`TaskActuator`、`TaskSchedulerHost` | 差量 reconcile、采集循环、失败监督 |
 | 连接池层 | `DeviceDriverPool`、`DeviceSharedPool` | 连接复用、Polly 弹性、空闲回收 |
-| 驱动层 | `IProtocolDriver`、`IPushProtocolDriver` | 协议通信与编解码 |
+| 驱动层 | `IProtocolDriver`、`IPushProtocolDriver`、`ProtocolDriverBase<TClient>` | 协议通信与编解码 |
 | 管道层 | `DriverResultPipeline`、`PipelineHost` | Channel 消费、fan-out、背压 |
 | 扩展 | `PlcLibrary.Monitor` | 最新值缓存 + 变化订阅（`IDataHandler`） |
+
+2.0 起 `IDeviceScheduler`、`IDeviceAccessor`、`IDeviceBrowser`、`IDataPipeline` 都是内部实现；应用只依赖 `IPlcGateway`，驱动仍只依赖 `IProtocolDriver` 等公开契约。
 
 分层原则：上层依赖下层，下层不感知上层；`Channel<DriverResult>` 解耦调度与管道。`TaskScheduler`、`DriverResultPipeline`、`PlcMonitor` 是纯业务类，`*Host : BackgroundService` 只接管宿主生命周期。
 
@@ -63,7 +65,7 @@ sequenceDiagram
 
 ## 调度层
 
-`TaskScheduler` 实现 `IDeviceScheduler`，按 `Id` 做差量 reconcile：
+`TaskScheduler` 实现（internal）`IDeviceScheduler`，按 `Id` 做差量 reconcile：
 
 - 新增设备 → 创建 `TaskActuator` 并启动
 - 配置变更（协议/连接串/超时/采集周期/点位集合）→ 停止并重建
@@ -97,7 +99,7 @@ public override async Task StopAsync(CancellationToken ct)
 
 ## 连接池层
 
-`DeviceDriverPool` 实现 `IDeviceAccessor`，按 `协议|连接串` 维护 `DeviceSharedPool`：
+`DeviceDriverPool` 实现（internal）`IDeviceAccessor`/`IDeviceBrowser`，按 `协议|连接串` 维护 `DeviceSharedPool`：
 
 | 组件 | 作用 |
 |------|------|
@@ -146,7 +148,7 @@ flowchart TD
 - `HandleAsync`：先尝试写入有界队列；超过 `EnqueueTimeout`（默认 5s）仍无空间则丢弃该点并计入 `plc.pipeline.dropped`，避免采集循环被反压永久卡住
 - `ConsumeAsync`：`ReadAllAsync` 串行消费，逐条 `DispatchAsync`
 - 分发：单 handler 直接调用（快路径）；多 handler 按 `MaxHandlerParallelism` 并行；每个 handler 的 `HandlerTimeout` 是**硬上限**（`WaitAsync`），即使忽略取消令牌也不会卡住分发；超时/异常只记录不干扰其它 handler
-- 订阅：`IDataPipeline.ReadAsync` 为每个订阅者建容量 1000 的通道，满时 `DropOldest`（不逐点计数；`plc.pipeline.dropped` 只统计写入队列超时）
+- 订阅：`IDataPipeline.ReadAsync`（internal）为每个订阅者建容量 1000 的通道，满时 `DropOldest`（不逐点计数；`plc.pipeline.dropped` 只统计写入队列超时）
 - 停机：`StopConsuming` 完成 Writer，`DisposeResources` 完成所有订阅通道
 
 ## 编写自定义驱动
@@ -221,7 +223,7 @@ public sealed class MyDriver(ILogger<MyDriver> logger, DeviceConfiguration devic
 - `ConnectAsync` 失败置 `Faulted` 并抛出；`TryReconnectAsync` 由基类统一，失败返回 false（取消除外）
 - 释放所有 socket/客户端；`DisposeAsync` 先断开再释放；需要额外释放/日志时覆写基类模板
 - 分页/批量读取时按组隔离错误；未支持的类型返回 `BadConfigError`
-- 可选实现 `ITagBrowser`（浏览直接子节点）；`DeviceDriverPool` 通过 `IDeviceBrowser` 统一借用/归还驱动
+- 可选实现 `ITagBrowser`（浏览直接子节点）；`DeviceDriverPool` 通过 internal `IDeviceBrowser` 统一借用/归还驱动，应用通过 `IPlcGateway` 使用
 
 ### 4. 注册
 
@@ -363,9 +365,4 @@ OPC UA 测试包 `OPCFoundation.NetStandard.Opc.Ua.Server` 为 **test-only**，�
 
 ## 文档维护约定
 
-- **README**：使用者视角（配置、API、行为）；不要写内部实现细节
-- **DEVELOPMENT**：架构、设计决策、测试策略、已知限制；实现变更同步更新
-- **AGENTS**：代理规则与仓库地图，不复制大段内容，只链接
-- **CHANGELOG**：每次发布记录新增/修复/不兼容变更；测试数量以实际运行结果为准
-- **ASSESSMENT**：带日期的快照，不随代码更新；新评估另建文件，旧文件保留并标注状态
-- 同一事实只写一处，其它文档链接过去；避免"当前/最新"等易过期措辞，改为具体版本或日期
+- 文档规则见 [AGENTS.md](./AGENTS.md#文档维护约定)

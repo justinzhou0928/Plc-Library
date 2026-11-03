@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Options;
 using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.Monitor.Interfaces;
 using PlcLibrary.Monitor.Models;
@@ -199,7 +199,6 @@ namespace PlcLibrary.Monitor.Engine
 
         public required string DeviceId { get; init; }
 
-        // null 表示订阅整个设备
         public string? TagId { get; init; }
 
         public required Channel<DriverResult> Channel { get; init; }

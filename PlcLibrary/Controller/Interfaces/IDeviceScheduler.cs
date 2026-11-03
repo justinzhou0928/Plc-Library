@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace PlcLibrary.Controller.Interfaces
 {
-    public interface IDeviceScheduler
+    internal interface IDeviceScheduler
     {
         Task ApplyDevicesAsync(IReadOnlyList<DeviceConfiguration> devices, CancellationToken ct = default);
 

@@ -55,7 +55,7 @@
 | 连接串未知键严格校验（含允许键提示） | ✅ |
 | IO 级按设备断路器 | ✅ |
 | 连接串值引号/转义（`;`、冒号、首尾空格、双写引号） | ✅ |
-| OPC UA `ITagBrowser` / `IDeviceBrowser` 标签浏览 | ✅ |
+| OPC UA `ITagBrowser` / `IPlcGateway.BrowseAsync` 标签浏览 | ✅ |
 | `ProtocolDriverBase<TClient>`：统一状态机/重连/`Faulted`/释放模板（S7/Omron/Mitsubishi/AB/BACnet/OPC UA） | ✅ |
 
 ## 仍要补齐的（按优先级）

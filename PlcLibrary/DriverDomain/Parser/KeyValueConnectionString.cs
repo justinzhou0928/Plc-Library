@@ -9,7 +9,7 @@ namespace PlcLibrary.DriverDomain.Parser
         /// <summary>
         /// 解析 <c>key:value;key:value</c>。值可用单/双引号包裹以保留 <c>;</c>、
         /// 首尾空格和冒号；引号内的同种引号用双写转义（如 <c>"a""b"</c>）。
-        /// 未加引号的值保持旧的 Trim 行为。
+        /// 未加引号的值会 Trim
         /// </summary>
         public static IReadOnlyDictionary<string, string> Parse(string connectionString)
         {
@@ -30,7 +30,7 @@ namespace PlcLibrary.DriverDomain.Parser
 
                 if (i >= text.Length || text[i] == ';')
                 {
-                    // 没有冒号的畸形片段：跳到下一个分号，保持旧的“跳过”语义。
+                    // 没有冒号的畸形片段：跳到下一个分号
                     while (i < text.Length && text[i] != ';') i++;
                     continue;
                 }
