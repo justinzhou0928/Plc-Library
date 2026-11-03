@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using NModbus;
@@ -8,8 +10,6 @@ using PlcLibrary.General.Configuration;
 using PlcLibrary.Modbus;
 using PlcLibrary.Monitor.Extensions;
 using PlcLibrary.Monitor.Interfaces;
-using System.Net;
-using System.Net.Sockets;
 
 namespace PlcLibrary.Tests.Monitor;
 
@@ -249,7 +249,9 @@ internal sealed class ModbusSlaveServer : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _cts.Cancel();
-        try { await _listenTask; } catch { }
+        try
+        { await _listenTask; }
+        catch { }
         (_network as IDisposable)?.Dispose();
         _listener.Stop();
         _cts.Dispose();

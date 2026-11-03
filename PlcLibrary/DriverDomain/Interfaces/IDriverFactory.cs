@@ -1,7 +1,7 @@
-﻿using PlcLibrary.General.Configuration;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.DriverDomain.Interfaces
 {

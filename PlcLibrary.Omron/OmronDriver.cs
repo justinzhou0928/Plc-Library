@@ -1,3 +1,9 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using NewLife.Omron.Protocols;
 using PlcLibrary.DriverDomain;
@@ -7,12 +13,6 @@ using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.DriverDomain.Parser;
 using PlcLibrary.General.Configuration;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Reflection;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace PlcLibrary.Omron
 {
@@ -89,8 +89,12 @@ namespace PlcLibrary.Omron
                 SetState(null, DriverStatus.Faulted);
                 if (client is not null)
                 {
-                    try { client.Close(); } catch { }
-                    try { client.Dispose(); } catch { }
+                    try
+                    { client.Close(); }
+                    catch { }
+                    try
+                    { client.Dispose(); }
+                    catch { }
                 }
                 OmronLog.LogConnectionFailed(_logger, ex, _config.Host, _config.Port);
                 throw;
@@ -103,9 +107,11 @@ namespace PlcLibrary.Omron
 
             if (old is not null)
             {
-                try { old.Close(); }
+                try
+                { old.Close(); }
                 catch { }
-                try { old.Dispose(); }
+                try
+                { old.Dispose(); }
                 catch { }
             }
 
@@ -125,7 +131,8 @@ namespace PlcLibrary.Omron
         public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             var client = GetClientOrThrow("Omron FINS");
-            if (points.Length == 0) return [];
+            if (points.Length == 0)
+                return [];
 
             var results = new DriverResult[points.Length];
             var plans = new List<ReadPlan>(points.Length);
@@ -151,7 +158,8 @@ namespace PlcLibrary.Omron
                 }
 
                 FinsAddress address;
-                try { address = FinsAddress.Parse(point.Address); }
+                try
+                { address = FinsAddress.Parse(point.Address); }
                 catch (Exception ex)
                 {
                     results[i] = DriverResult.Bad(point.Address, QualityCode.BadConfigError,
@@ -191,7 +199,8 @@ namespace PlcLibrary.Omron
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
             var finsClient = GetClientOrThrow("Omron FINS");
-            if (values.Count == 0) return [];
+            if (values.Count == 0)
+                return [];
 
             var entryList = values.ToList();
             var results = new DriverResult[entryList.Count];
@@ -243,7 +252,8 @@ namespace PlcLibrary.Omron
 
                     if (current.Count == 0 || planStart > end || mergedEnd - start > MaxWordsPerRead)
                     {
-                        if (current.Count > 0) groups.Add(current);
+                        if (current.Count > 0)
+                            groups.Add(current);
                         current = [plan];
                         start = planStart;
                         end = planEnd;
@@ -255,7 +265,8 @@ namespace PlcLibrary.Omron
                     }
                 }
 
-                if (current.Count > 0) groups.Add(current);
+                if (current.Count > 0)
+                    groups.Add(current);
             }
 
             return groups;
@@ -278,7 +289,8 @@ namespace PlcLibrary.Omron
                         || plan.BitIndex > end + MaxBitGap
                         || plan.BitIndex - start >= MaxBitsPerRead)
                     {
-                        if (current.Count > 0) groups.Add(current);
+                        if (current.Count > 0)
+                            groups.Add(current);
                         current = [plan];
                         start = plan.BitIndex;
                         end = plan.BitIndex + 1;
@@ -290,7 +302,8 @@ namespace PlcLibrary.Omron
                     }
                 }
 
-                if (current.Count > 0) groups.Add(current);
+                if (current.Count > 0)
+                    groups.Add(current);
             }
 
             return groups;
@@ -357,7 +370,8 @@ namespace PlcLibrary.Omron
         private static object? ReadElement(ByteTransform transform, byte[] buffer, int offset, Type type)
         {
             var bytes = ElementByteCount(type);
-            if (offset < 0 || offset + bytes > buffer.Length) return null;
+            if (offset < 0 || offset + bytes > buffer.Length)
+                return null;
 
             return Type.GetTypeCode(type) switch
             {

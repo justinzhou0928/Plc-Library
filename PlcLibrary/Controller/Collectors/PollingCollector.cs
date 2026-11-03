@@ -1,3 +1,6 @@
+using System;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using PlcLibrary.Controller.Engine;
 using PlcLibrary.DriverDomain.Interfaces;
@@ -5,9 +8,6 @@ using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.General;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.Pipeline.Interfaces;
-using System;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace PlcLibrary.Controller.Collectors
 {
@@ -30,7 +30,8 @@ namespace PlcLibrary.Controller.Collectors
             using var timer = new PeriodicTimer(device.CollectionInterval);
             while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
             {
-                try { await CollectOnceAsync(ct).ConfigureAwait(false); }
+                try
+                { await CollectOnceAsync(ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { return; }
                 catch (Exception ex) { ControllerLog.LogCollectionFailed(logger, ex, device.Id); }
                 finally

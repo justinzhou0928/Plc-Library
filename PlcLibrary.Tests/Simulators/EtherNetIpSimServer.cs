@@ -155,20 +155,25 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
 
     public bool SawInboundCommand(ushort command)
     {
-        lock (_gate) return _receivedCommands.Contains(command);
+        lock (_gate)
+            return _receivedCommands.Contains(command);
     }
 
     public bool SawService(byte service)
     {
-        lock (_gate) return _requests.Any(r => r.Service == service);
+        lock (_gate)
+            return _requests.Any(r => r.Service == service);
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
 
         await _cts.CancelAsync().ConfigureAwait(false);
-        try { _listener.Stop(); } catch { /* already stopped */ }
+        try
+        { _listener.Stop(); }
+        catch { /* already stopped */ }
 
         TcpClient? client;
         NetworkStream? stream;
@@ -180,12 +185,18 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
             _activeStream = null;
         }
 
-        try { stream?.Dispose(); } catch { /* best-effort cleanup */ }
-        try { client?.Dispose(); } catch { /* best-effort cleanup */ }
+        try
+        { stream?.Dispose(); }
+        catch { /* best-effort cleanup */ }
+        try
+        { client?.Dispose(); }
+        catch { /* best-effort cleanup */ }
 
         if (_acceptTask is not null)
         {
-            try { await _acceptTask.ConfigureAwait(false); } catch { /* shutdown races are expected */ }
+            try
+            { await _acceptTask.ConfigureAwait(false); }
+            catch { /* shutdown races are expected */ }
         }
 
         _cts.Dispose();
@@ -193,7 +204,8 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
 
     private void AddTag(SimTag tag)
     {
-        lock (_gate) _tags[tag.Name] = tag;
+        lock (_gate)
+            _tags[tag.Name] = tag;
     }
 
     private SimTag GetTag(string name)
@@ -244,8 +256,12 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
                         _activeStream = null;
                     }
                 }
-                try { stream.Dispose(); } catch { /* best-effort */ }
-                try { client.Dispose(); } catch { /* best-effort */ }
+                try
+                { stream.Dispose(); }
+                catch { /* best-effort */ }
+                try
+                { client.Dispose(); }
+                catch { /* best-effort */ }
             }
         }
     }
@@ -255,7 +271,8 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
         while (!ct.IsCancellationRequested)
         {
             var frame = await ReadFrameAsync(stream, ct).ConfigureAwait(false);
-            if (frame is null) return;
+            if (frame is null)
+                return;
 
             var command = BinaryPrimitives.ReadUInt16LittleEndian(frame);
             var length = BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(2));
@@ -263,9 +280,11 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
             var context = frame.AsSpan(12, 8).ToArray();
             var data = frame.AsSpan(24, length).ToArray();
 
-            lock (_gate) _receivedCommands.Add(command);
+            lock (_gate)
+                _receivedCommands.Add(command);
 
-            if (PauseResponses && command != CommandRegisterSession) continue;
+            if (PauseResponses && command != CommandRegisterSession)
+                continue;
 
             switch (command)
             {
@@ -276,26 +295,26 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
                     break;
 
                 case CommandSendRRData:
-                {
-                    var cipRequest = ExtractUnconnectedData(data);
-                    var cipReply = cipRequest is null
-                        ? BuildCipReply(0, 0x13)
-                        : HandleCipRequest(cipRequest, insideMultiService: false);
-                    await WriteFrameAsync(stream, CommandSendRRData, session, context,
-                        BuildUnconnectedReply(cipReply), ct).ConfigureAwait(false);
-                    break;
-                }
+                    {
+                        var cipRequest = ExtractUnconnectedData(data);
+                        var cipReply = cipRequest is null
+                            ? BuildCipReply(0, 0x13)
+                            : HandleCipRequest(cipRequest, insideMultiService: false);
+                        await WriteFrameAsync(stream, CommandSendRRData, session, context,
+                            BuildUnconnectedReply(cipReply), ct).ConfigureAwait(false);
+                        break;
+                    }
 
                 case CommandSendUnitData:
-                {
-                    var (connectionId, sequence, cipRequest) = ExtractConnectedData(data);
-                    var cipReply = cipRequest is null
-                        ? BuildCipReply(0, 0x13)
-                        : HandleCipRequest(cipRequest, insideMultiService: false);
-                    await WriteFrameAsync(stream, CommandSendUnitData, session, context,
-                        BuildConnectedReply(connectionId, sequence, cipReply), ct).ConfigureAwait(false);
-                    break;
-                }
+                    {
+                        var (connectionId, sequence, cipRequest) = ExtractConnectedData(data);
+                        var cipReply = cipRequest is null
+                            ? BuildCipReply(0, 0x13)
+                            : HandleCipRequest(cipRequest, insideMultiService: false);
+                        await WriteFrameAsync(stream, CommandSendUnitData, session, context,
+                            BuildConnectedReply(connectionId, sequence, cipReply), ct).ConfigureAwait(false);
+                        break;
+                    }
 
                 case CommandUnregisterSession:
                     return;
@@ -313,16 +332,19 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
     private async Task<byte[]?> ReadFrameAsync(NetworkStream stream, CancellationToken ct)
     {
         var header = new byte[24];
-        if (!await ReadExactAsync(stream, header, ct).ConfigureAwait(false)) return null;
+        if (!await ReadExactAsync(stream, header, ct).ConfigureAwait(false))
+            return null;
 
         var length = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(2));
         var payload = new byte[length];
-        if (!await ReadExactAsync(stream, payload, ct).ConfigureAwait(false)) return null;
+        if (!await ReadExactAsync(stream, payload, ct).ConfigureAwait(false))
+            return null;
 
         var frame = new byte[24 + length];
         header.CopyTo(frame, 0);
         payload.CopyTo(frame, 24);
-        lock (_gate) _frames.Add($"RX {Convert.ToHexString(frame)}");
+        lock (_gate)
+            _frames.Add($"RX {Convert.ToHexString(frame)}");
         return frame;
     }
 
@@ -344,23 +366,27 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
         BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(20), 0);
         data.CopyTo(frame, 24);
 
-        lock (_gate) _frames.Add($"TX {Convert.ToHexString(frame)}");
+        lock (_gate)
+            _frames.Add($"TX {Convert.ToHexString(frame)}");
         await stream.WriteAsync(frame, ct).ConfigureAwait(false);
     }
 
     private byte[] HandleCipRequest(byte[] cipRequest, bool insideMultiService)
     {
-        if (cipRequest.Length < 2) return BuildCipReply(0, 0x13);
+        if (cipRequest.Length < 2)
+            return BuildCipReply(0, 0x13);
 
         var service = cipRequest[0];
         var pathWordCount = cipRequest[1];
         var pathByteCount = pathWordCount * 2;
-        if (2 + pathByteCount > cipRequest.Length) return BuildCipReply(service, 0x13);
+        if (2 + pathByteCount > cipRequest.Length)
+            return BuildCipReply(service, 0x13);
 
         var path = cipRequest.AsSpan(2, pathByteCount).ToArray();
         var requestData = cipRequest.AsSpan(2 + pathByteCount).ToArray();
         var tagName = ParseTagName(path);
-        lock (_gate) _requests.Add(new SimRequest(service, tagName, insideMultiService));
+        lock (_gate)
+            _requests.Add(new SimRequest(service, tagName, insideMultiService));
 
         return service switch
         {
@@ -375,16 +401,20 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
 
     private byte[] HandleReadTag(byte service, string? tagName, byte[] requestData)
     {
-        if (tagName is null) return BuildCipReply(service, 0x05);
+        if (tagName is null)
+            return BuildCipReply(service, 0x05);
 
         SimTag? tag;
-        lock (_gate) _tags.TryGetValue(tagName, out tag);
-        if (tag is null) return BuildCipReply(service, 0x05); // path destination unknown
+        lock (_gate)
+            _tags.TryGetValue(tagName, out tag);
+        if (tag is null)
+            return BuildCipReply(service, 0x05); // path destination unknown
 
         var elementCount = requestData.Length >= 2
             ? BinaryPrimitives.ReadUInt16LittleEndian(requestData)
             : (ushort)1;
-        if (elementCount == 0) elementCount = 1;
+        if (elementCount == 0)
+            elementCount = 1;
 
         var payload = new byte[2 + (tag.ElementSize * elementCount)];
         BinaryPrimitives.WriteUInt16LittleEndian(payload, tag.TypeCode);
@@ -406,29 +436,37 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
 
     private byte[] HandleWriteTag(byte service, string? tagName, byte[] requestData)
     {
-        if (tagName is null) return BuildCipReply(service, 0x05);
+        if (tagName is null)
+            return BuildCipReply(service, 0x05);
 
         SimTag? tag;
-        lock (_gate) _tags.TryGetValue(tagName, out tag);
-        if (tag is null) return BuildCipReply(service, 0x05);
+        lock (_gate)
+            _tags.TryGetValue(tagName, out tag);
+        if (tag is null)
+            return BuildCipReply(service, 0x05);
 
-        if (requestData.Length < 4) return BuildCipReply(service, 0x13);
+        if (requestData.Length < 4)
+            return BuildCipReply(service, 0x13);
 
         var typeCode = BinaryPrimitives.ReadUInt16LittleEndian(requestData);
         var elementCount = BinaryPrimitives.ReadUInt16LittleEndian(requestData.AsSpan(2));
-        if (elementCount == 0 || typeCode != tag.TypeCode) return BuildCipReply(service, 0x07);
+        if (elementCount == 0 || typeCode != tag.TypeCode)
+            return BuildCipReply(service, 0x07);
 
         var required = tag.ElementSize * elementCount;
-        if (requestData.Length < 4 + required) return BuildCipReply(service, 0x13);
+        if (requestData.Length < 4 + required)
+            return BuildCipReply(service, 0x13);
 
         var newData = requestData.AsSpan(4, required).ToArray();
-        lock (_gate) tag.Data = newData;
+        lock (_gate)
+            tag.Data = newData;
         return BuildCipReply(service, 0x00);
     }
 
     private byte[] HandleMultipleServicePacket(byte[] path, byte[] requestData, bool insideMultiService)
     {
-        if (RejectMultiService) return BuildCipReply(ServiceMultipleServicePacket, 0x08);
+        if (RejectMultiService)
+            return BuildCipReply(ServiceMultipleServicePacket, 0x08);
 
         if (path.Length < 4 || requestData.Length < 2)
             return BuildCipReply(ServiceMultipleServicePacket, 0x13);
@@ -475,7 +513,8 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
     {
         if (path.Length < 4 || path[0] != 0x20 || path[1] != 0x06 || path[2] != 0x24 || path[3] != 0x01)
             return BuildCipReply(ServiceForwardOpen, 0x05);
-        if (requestData.Length < 36) return BuildCipReply(ServiceForwardOpen, 0x13);
+        if (requestData.Length < 36)
+            return BuildCipReply(ServiceForwardOpen, 0x13);
 
         var requestedToConnectionId = BinaryPrimitives.ReadUInt32LittleEndian(requestData.AsSpan(6));
         _connectionSerial = BinaryPrimitives.ReadUInt16LittleEndian(requestData.AsSpan(10));
@@ -501,7 +540,8 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
 
     private byte[] HandleForwardClose(byte[] requestData)
     {
-        if (requestData.Length < 8) return BuildCipReply(ServiceForwardClose, 0x13);
+        if (requestData.Length < 8)
+            return BuildCipReply(ServiceForwardClose, 0x13);
 
         var payload = new byte[10];
         BinaryPrimitives.WriteUInt16LittleEndian(payload, _connectionSerial);
@@ -521,16 +561,20 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
             switch (path[i])
             {
                 case 0x91: // ANSI extended symbolic segment
-                {
-                    if (i + 1 >= path.Length) return null;
-                    var length = path[i + 1];
-                    if (i + 2 + length > path.Length) return null;
-                    if (name.Length > 0) name.Append('.');
-                    name.Append(Encoding.ASCII.GetString(path, i + 2, length));
-                    i += 2 + length;
-                    if ((length & 1) != 0) i++; // pad to a 16-bit boundary
-                    break;
-                }
+                    {
+                        if (i + 1 >= path.Length)
+                            return null;
+                        var length = path[i + 1];
+                        if (i + 2 + length > path.Length)
+                            return null;
+                        if (name.Length > 0)
+                            name.Append('.');
+                        name.Append(Encoding.ASCII.GetString(path, i + 2, length));
+                        i += 2 + length;
+                        if ((length & 1) != 0)
+                            i++; // pad to a 16-bit boundary
+                        break;
+                    }
                 case 0x28: // 8-bit element index
                     i += 2;
                     break;
@@ -550,18 +594,22 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
 
     private static byte[]? ExtractUnconnectedData(byte[] data)
     {
-        if (data.Length < 8) return null;
+        if (data.Length < 8)
+            return null;
 
         var itemCount = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(6));
         var offset = 8;
         for (var i = 0; i < itemCount; i++)
         {
-            if (offset + 4 > data.Length) return null;
+            if (offset + 4 > data.Length)
+                return null;
             var type = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(offset));
             var length = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(offset + 2));
             offset += 4;
-            if (offset + length > data.Length) return null;
-            if (type == 0x00B2) return data.AsSpan(offset, length).ToArray(); // unconnected data
+            if (offset + length > data.Length)
+                return null;
+            if (type == 0x00B2)
+                return data.AsSpan(offset, length).ToArray(); // unconnected data
             offset += length;
         }
 
@@ -570,7 +618,8 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
 
     private static (uint ConnectionId, ushort Sequence, byte[]? Cip) ExtractConnectedData(byte[] data)
     {
-        if (data.Length < 8) return (0, 0, null);
+        if (data.Length < 8)
+            return (0, 0, null);
 
         var itemCount = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(6));
         var offset = 8;
@@ -580,11 +629,13 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
 
         for (var i = 0; i < itemCount; i++)
         {
-            if (offset + 4 > data.Length) return (connectionId, sequence, null);
+            if (offset + 4 > data.Length)
+                return (connectionId, sequence, null);
             var type = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(offset));
             var length = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(offset + 2));
             offset += 4;
-            if (offset + length > data.Length) return (connectionId, sequence, null);
+            if (offset + length > data.Length)
+                return (connectionId, sequence, null);
 
             if (type == 0x00A1 && length >= 4) // connected address
                 connectionId = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset));
@@ -642,7 +693,8 @@ public sealed class EtherNetIpSimServer : IAsyncDisposable
         while (read < buffer.Length)
         {
             var count = await stream.ReadAsync(buffer.AsMemory(read), ct).ConfigureAwait(false);
-            if (count == 0) return false;
+            if (count == 0)
+                return false;
             read += count;
         }
         return true;

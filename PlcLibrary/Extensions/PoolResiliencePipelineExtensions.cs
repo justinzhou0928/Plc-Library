@@ -1,3 +1,5 @@
+using System;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using PlcLibrary.DriverPool.Models;
 using PlcLibrary.General;
@@ -5,8 +7,6 @@ using Polly;
 using Polly.CircuitBreaker;
 using Polly.Retry;
 using Polly.Timeout;
-using System;
-using System.Threading;
 
 namespace PlcLibrary.Extensions
 {

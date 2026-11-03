@@ -1,3 +1,8 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using PlcLibrary.DriverDomain;
 using PlcLibrary.DriverDomain.Attributes;
@@ -8,11 +13,6 @@ using PlcLibrary.DriverDomain.Parser;
 using PlcLibrary.General.Configuration;
 using S7.Net;
 using S7.Net.Types;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace PlcLibrary.S7
 {
@@ -45,7 +45,9 @@ namespace PlcLibrary.S7
                 SetState(null, DriverStatus.Faulted);
                 if (plc is not null)
                 {
-                    try { plc.Close(); } catch { }
+                    try
+                    { plc.Close(); }
+                    catch { }
                 }
                 S7Log.LogConnectionFailed(logger, ex, _config.Host, _config.Port);
                 throw;
@@ -55,7 +57,8 @@ namespace PlcLibrary.S7
         public override Task DisconnectAsync(CancellationToken ct = default)
         {
             var old = DetachClient();
-            try { old?.Close(); }
+            try
+            { old?.Close(); }
             catch { }
             return Task.CompletedTask;
         }
@@ -67,7 +70,8 @@ namespace PlcLibrary.S7
         public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             var plc = GetClientOrThrow("S7");
-            if (points.Length == 0) return [];
+            if (points.Length == 0)
+                return [];
 
             var batchItems = new List<DataItem>(points.Length);
             var batchIndices = new List<int>(points.Length);
@@ -93,7 +97,8 @@ namespace PlcLibrary.S7
             if (batchItems.Count > 0)
             {
                 var batchSucceeded = true;
-                try { await plc.ReadMultipleVarsAsync(batchItems, ct).ConfigureAwait(false); }
+                try
+                { await plc.ReadMultipleVarsAsync(batchItems, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
@@ -131,7 +136,8 @@ namespace PlcLibrary.S7
 
             for (var i = 0; i < fallback.Length; i++)
             {
-                if (!fallback[i]) continue;
+                if (!fallback[i])
+                    continue;
                 ct.ThrowIfCancellationRequested();
                 try
                 {
@@ -158,7 +164,8 @@ namespace PlcLibrary.S7
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
             var plc = GetClientOrThrow("S7");
-            if (values.Count == 0) return [];
+            if (values.Count == 0)
+                return [];
 
             var entries = values.ToList();
             var results = new DriverResult[entries.Count];
@@ -179,7 +186,8 @@ namespace PlcLibrary.S7
                 }
             }
 
-            if (items.Count == 0) return results;
+            if (items.Count == 0)
+                return results;
 
             // 单点且非 string：直接逐点写（可取消），无需承担批量失败回退的双写风险
             if (items.Count == 1 && !IsStringPoint(entries[items[0].Index].Key))
@@ -254,12 +262,16 @@ namespace PlcLibrary.S7
         internal static bool TryParseStringAddress(string address, out int db, out int startByte, out int length)
         {
             db = startByte = length = 0;
-            if (string.IsNullOrEmpty(address)) return false;
+            if (string.IsNullOrEmpty(address))
+                return false;
 
             var parts = address.Split('.');
-            if (parts.Length != 3) return false;
-            if (!parts[0].StartsWith("DB", StringComparison.OrdinalIgnoreCase)) return false;
-            if (!parts[1].StartsWith("DBB", StringComparison.OrdinalIgnoreCase)) return false;
+            if (parts.Length != 3)
+                return false;
+            if (!parts[0].StartsWith("DB", StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (!parts[1].StartsWith("DBB", StringComparison.OrdinalIgnoreCase))
+                return false;
 
             return int.TryParse(parts[0].AsSpan(2), out db)
                 && int.TryParse(parts[1].AsSpan(3), out startByte)
@@ -269,7 +281,8 @@ namespace PlcLibrary.S7
         /// <summary>是否 S7 字符串点位：地址带长度后缀（<c>DBx.DBBx.len</c>）或显式配置了 string 类型。</summary>
         internal static bool IsStringPoint(TagPointConfiguration point)
         {
-            if (TryParseStringAddress(point.Address, out _, out _, out _)) return true;
+            if (TryParseStringAddress(point.Address, out _, out _, out _))
+                return true;
             return DataTypeMapper.Resolve(point.DataType) == typeof(string);
         }
 

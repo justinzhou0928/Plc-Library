@@ -1,3 +1,9 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
@@ -6,12 +12,6 @@ using PlcLibrary.Extensions;
 using PlcLibrary.General;
 using PlcLibrary.General.Configuration;
 using Polly;
-using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace PlcLibrary.DriverPool.Engine
 {
@@ -48,8 +48,10 @@ namespace PlcLibrary.DriverPool.Engine
         /// </summary>
         internal bool TryBeginRecycle()
         {
-            if (Interlocked.CompareExchange(ref _recycling, 1, 0) != 0) return false;
-            if (Volatile.Read(ref _inUse) == 0) return true;
+            if (Interlocked.CompareExchange(ref _recycling, 1, 0) != 0)
+                return false;
+            if (Volatile.Read(ref _inUse) == 0)
+                return true;
             Volatile.Write(ref _recycling, 0);
             return false;
         }
@@ -201,7 +203,8 @@ namespace PlcLibrary.DriverPool.Engine
 
         public async ValueTask DisposeAsync()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
 
             var drained = new List<IProtocolDriver>();
             lock (_gate)
@@ -217,7 +220,8 @@ namespace PlcLibrary.DriverPool.Engine
 
         private void TryRelease()
         {
-            try { _semaphore.Release(); }
+            try
+            { _semaphore.Release(); }
             catch (ObjectDisposedException) { }
         }
 

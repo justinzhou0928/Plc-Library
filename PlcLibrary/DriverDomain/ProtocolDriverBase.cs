@@ -61,7 +61,8 @@ namespace PlcLibrary.DriverDomain
         /// <summary>只更新状态（例如 KeepAlive/监视器把状态置 Faulted）</summary>
         protected void SetStatus(DriverStatus status)
         {
-            lock (_stateLock) _status = status;
+            lock (_stateLock)
+                _status = status;
         }
 
         /// <summary>尝试取当前已连接客户端；供需要额外状态（如设备地址）的驱动在锁内做一致性检查</summary>

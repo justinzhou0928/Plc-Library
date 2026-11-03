@@ -1,5 +1,5 @@
-using PlcLibrary.Modbus;
 using System.IO.Ports;
+using PlcLibrary.Modbus;
 
 namespace PlcLibrary.Tests.Modbus;
 

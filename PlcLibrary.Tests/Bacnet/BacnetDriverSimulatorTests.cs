@@ -1,14 +1,14 @@
-using Microsoft.Extensions.Logging.Abstractions;
-using PlcLibrary.Bacnet;
-using PlcLibrary.DriverDomain.Enums;
-using PlcLibrary.General.Configuration;
-using PlcLibrary.Tests.Simulators;
 using System;
 using System.Collections.Generic;
 using System.IO.BACnet;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging.Abstractions;
+using PlcLibrary.Bacnet;
+using PlcLibrary.DriverDomain.Enums;
+using PlcLibrary.General.Configuration;
+using PlcLibrary.Tests.Simulators;
 
 namespace PlcLibrary.Tests.Bacnet;
 

@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -7,7 +8,6 @@ using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.Pipeline.Engine;
 using PlcLibrary.Pipeline.Interfaces;
 using PlcLibrary.Pipeline.Models;
-using System.Threading.Channels;
 
 namespace PlcLibrary.Tests.Pipeline;
 

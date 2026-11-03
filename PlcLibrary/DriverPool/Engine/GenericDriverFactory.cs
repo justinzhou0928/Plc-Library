@@ -1,8 +1,8 @@
-using PlcLibrary.DriverDomain.Interfaces;
-using PlcLibrary.General.Configuration;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using PlcLibrary.DriverDomain.Interfaces;
+using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.DriverPool.Engine
 {

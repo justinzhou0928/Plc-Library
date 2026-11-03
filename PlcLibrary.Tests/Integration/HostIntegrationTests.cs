@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using PlcLibrary.Controller.Interfaces;
@@ -8,7 +9,6 @@ using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.Extensions;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.Pipeline.Interfaces;
-using System.Collections.Concurrent;
 
 namespace PlcLibrary.Tests.Integration;
 

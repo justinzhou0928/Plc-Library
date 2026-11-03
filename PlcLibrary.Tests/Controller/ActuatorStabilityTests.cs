@@ -1,4 +1,4 @@
-﻿using PlcLibrary.Controller.Engine;
+using PlcLibrary.Controller.Engine;
 using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.Tests.Controller;

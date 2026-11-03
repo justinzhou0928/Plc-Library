@@ -1,4 +1,4 @@
-﻿using PlcLibrary.Modbus;
+using PlcLibrary.Modbus;
 
 namespace PlcLibrary.Tests.Modbus;
 

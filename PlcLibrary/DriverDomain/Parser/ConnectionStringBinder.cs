@@ -1,8 +1,8 @@
-using Microsoft.Extensions.Configuration;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using Microsoft.Extensions.Configuration;
 
 namespace PlcLibrary.DriverDomain.Parser
 {
@@ -34,7 +34,8 @@ namespace PlcLibrary.DriverDomain.Parser
                 allowed.Add(key);
 
             var unknown = values.Keys.Where(k => !allowed.Contains(k)).ToArray();
-            if (unknown.Length == 0) return;
+            if (unknown.Length == 0)
+                return;
 
             throw new InvalidOperationException(
                 $"Unknown connection string key(s) for {typeof(T).Name}: {string.Join(", ", unknown)}. " +

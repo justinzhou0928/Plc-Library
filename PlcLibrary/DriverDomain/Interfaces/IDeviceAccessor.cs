@@ -1,8 +1,8 @@
-using PlcLibrary.DriverDomain.Models;
-using PlcLibrary.General.Configuration;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using PlcLibrary.DriverDomain.Models;
+using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.DriverDomain.Interfaces
 {

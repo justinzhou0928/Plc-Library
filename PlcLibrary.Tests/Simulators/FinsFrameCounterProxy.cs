@@ -36,7 +36,9 @@ internal sealed class FinsFrameCounterProxy : IAsyncDisposable
     {
         _cts.Cancel();
         _listener.Stop();
-        try { await _acceptTask.ConfigureAwait(false); } catch { }
+        try
+        { await _acceptTask.ConfigureAwait(false); }
+        catch { }
         _cts.Dispose();
     }
 
@@ -45,7 +47,8 @@ internal sealed class FinsFrameCounterProxy : IAsyncDisposable
         while (!ct.IsCancellationRequested)
         {
             TcpClient client;
-            try { client = await _listener.AcceptTcpClientAsync(ct).ConfigureAwait(false); }
+            try
+            { client = await _listener.AcceptTcpClientAsync(ct).ConfigureAwait(false); }
             catch { return; }
 
             _ = HandleAsync(client, ct);
@@ -73,7 +76,9 @@ internal sealed class FinsFrameCounterProxy : IAsyncDisposable
             var down = PumpAsync(upstreamStream, clientStream, null, ct);
             var up = PumpAsync(clientStream, upstreamStream, buffer, ct);
             await Task.WhenAny(down, up).ConfigureAwait(false);
-            try { await Task.WhenAll(down, up).ConfigureAwait(false); } catch { }
+            try
+            { await Task.WhenAll(down, up).ConfigureAwait(false); }
+            catch { }
         }
     }
 
@@ -85,7 +90,8 @@ internal sealed class FinsFrameCounterProxy : IAsyncDisposable
             while (!ct.IsCancellationRequested)
             {
                 var read = await from.ReadAsync(buffer, ct).ConfigureAwait(false);
-                if (read == 0) return;
+                if (read == 0)
+                    return;
 
                 if (frameBuffer is not null)
                     CountFrames(buffer.AsSpan(0, read), frameBuffer);
@@ -116,7 +122,8 @@ internal sealed class FinsFrameCounterProxy : IAsyncDisposable
                 continue;
             }
 
-            if (pending.Count < frameLength) return;
+            if (pending.Count < frameLength)
+                return;
 
             var command = (pending[8] << 24) | (pending[9] << 16) | (pending[10] << 8) | pending[11];
             if (command == 2)

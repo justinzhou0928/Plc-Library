@@ -1,3 +1,5 @@
+using System;
+using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -12,8 +14,6 @@ using PlcLibrary.General.Configuration;
 using PlcLibrary.Pipeline.Engine;
 using PlcLibrary.Pipeline.Interfaces;
 using PlcLibrary.Pipeline.Models;
-using System;
-using System.Reflection;
 
 namespace PlcLibrary.Extensions
 {

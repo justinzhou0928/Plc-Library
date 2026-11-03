@@ -1,3 +1,10 @@
+using System;
+using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using EthernetIPSharp.Logix;
 using Microsoft.Extensions.Logging;
 using PlcLibrary.DriverDomain;
@@ -7,13 +14,6 @@ using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.DriverDomain.Parser;
 using PlcLibrary.General.Configuration;
-using System;
-using System.Buffers.Binary;
-using System.Collections.Generic;
-using System.Linq;
-using System.Reflection;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace PlcLibrary.AllenBradley
 {
@@ -60,7 +60,8 @@ namespace PlcLibrary.AllenBradley
                 SetState(null, DriverStatus.Faulted);
                 if (client is not null)
                 {
-                    try { await client.DisposeAsync().ConfigureAwait(false); }
+                    try
+                    { await client.DisposeAsync().ConfigureAwait(false); }
                     catch { }
                 }
                 AllenBradleyLog.LogConnectionFailed(_logger, ex, _config.Host, _config.Port);
@@ -74,7 +75,8 @@ namespace PlcLibrary.AllenBradley
 
             if (old is not null)
             {
-                try { await old.DisposeAsync().ConfigureAwait(false); }
+                try
+                { await old.DisposeAsync().ConfigureAwait(false); }
                 catch { }
             }
         }
@@ -92,7 +94,8 @@ namespace PlcLibrary.AllenBradley
         public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             var tagClient = GetClientOrThrow("AllenBradley");
-            if (points.Length == 0) return [];
+            if (points.Length == 0)
+                return [];
 
             var results = new DriverResult[points.Length];
             var handled = new bool[points.Length];
@@ -117,7 +120,8 @@ namespace PlcLibrary.AllenBradley
             for (var i = 0; i < points.Length; i++)
             {
                 ct.ThrowIfCancellationRequested();
-                if (handled[i] || types[i] == typeof(string)) continue; // string 标签走逐点 ReadStringAsync
+                if (handled[i] || types[i] == typeof(string))
+                    continue; // string 标签走逐点 ReadStringAsync
                 batchIndices.Add(i);
                 batchTags.Add(points[i].Address);
                 batchTypes.Add(types[i]!);
@@ -170,7 +174,8 @@ namespace PlcLibrary.AllenBradley
             // 逐点：string 类型
             for (var i = 0; i < points.Length; i++)
             {
-                if (handled[i]) continue;
+                if (handled[i])
+                    continue;
                 ct.ThrowIfCancellationRequested();
                 try
                 {
@@ -197,7 +202,8 @@ namespace PlcLibrary.AllenBradley
         /// </summary>
         private async Task<T> WithTimeoutAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken ct)
         {
-            if (_config.Timeout <= 0) return await action(ct).ConfigureAwait(false);
+            if (_config.Timeout <= 0)
+                return await action(ct).ConfigureAwait(false);
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(_config.Timeout);
@@ -244,30 +250,73 @@ namespace PlcLibrary.AllenBradley
         {
             value = null;
             const int typeCodeLength = 2;
-            if (data.Length < typeCodeLength) return false;
+            if (data.Length < typeCodeLength)
+                return false;
 
             var expectedTypeCode = ExpectedCipTypeCode(type);
-            if (expectedTypeCode == 0) return false;
+            if (expectedTypeCode == 0)
+                return false;
 
             var actualTypeCode = (ushort)(data[0] | (data[1] << 8));
-            if (actualTypeCode != expectedTypeCode) return false;
+            if (actualTypeCode != expectedTypeCode)
+                return false;
 
             var payload = data.AsSpan(typeCodeLength);
-            if (payload.Length == 0) return false;
+            if (payload.Length == 0)
+                return false;
             switch (Type.GetTypeCode(type))
             {
-                case TypeCode.Boolean: value = payload[0] != 0; return true;
-                case TypeCode.SByte: value = unchecked((sbyte)payload[0]); return true;
-                case TypeCode.Byte: value = payload[0]; return true;
-                case TypeCode.Int16: if (payload.Length < 2) return false; value = BinaryPrimitives.ReadInt16LittleEndian(payload); return true;
-                case TypeCode.UInt16: if (payload.Length < 2) return false; value = BinaryPrimitives.ReadUInt16LittleEndian(payload); return true;
-                case TypeCode.Int32: if (payload.Length < 4) return false; value = BinaryPrimitives.ReadInt32LittleEndian(payload); return true;
-                case TypeCode.UInt32: if (payload.Length < 4) return false; value = BinaryPrimitives.ReadUInt32LittleEndian(payload); return true;
-                case TypeCode.Int64: if (payload.Length < 8) return false; value = BinaryPrimitives.ReadInt64LittleEndian(payload); return true;
-                case TypeCode.UInt64: if (payload.Length < 8) return false; value = BinaryPrimitives.ReadUInt64LittleEndian(payload); return true;
-                case TypeCode.Single: if (payload.Length < 4) return false; value = BinaryPrimitives.ReadSingleLittleEndian(payload); return true;
-                case TypeCode.Double: if (payload.Length < 8) return false; value = BinaryPrimitives.ReadDoubleLittleEndian(payload); return true;
-                default: return false;
+                case TypeCode.Boolean:
+                    value = payload[0] != 0;
+                    return true;
+                case TypeCode.SByte:
+                    value = unchecked((sbyte)payload[0]);
+                    return true;
+                case TypeCode.Byte:
+                    value = payload[0];
+                    return true;
+                case TypeCode.Int16:
+                    if (payload.Length < 2)
+                        return false;
+                    value = BinaryPrimitives.ReadInt16LittleEndian(payload);
+                    return true;
+                case TypeCode.UInt16:
+                    if (payload.Length < 2)
+                        return false;
+                    value = BinaryPrimitives.ReadUInt16LittleEndian(payload);
+                    return true;
+                case TypeCode.Int32:
+                    if (payload.Length < 4)
+                        return false;
+                    value = BinaryPrimitives.ReadInt32LittleEndian(payload);
+                    return true;
+                case TypeCode.UInt32:
+                    if (payload.Length < 4)
+                        return false;
+                    value = BinaryPrimitives.ReadUInt32LittleEndian(payload);
+                    return true;
+                case TypeCode.Int64:
+                    if (payload.Length < 8)
+                        return false;
+                    value = BinaryPrimitives.ReadInt64LittleEndian(payload);
+                    return true;
+                case TypeCode.UInt64:
+                    if (payload.Length < 8)
+                        return false;
+                    value = BinaryPrimitives.ReadUInt64LittleEndian(payload);
+                    return true;
+                case TypeCode.Single:
+                    if (payload.Length < 4)
+                        return false;
+                    value = BinaryPrimitives.ReadSingleLittleEndian(payload);
+                    return true;
+                case TypeCode.Double:
+                    if (payload.Length < 8)
+                        return false;
+                    value = BinaryPrimitives.ReadDoubleLittleEndian(payload);
+                    return true;
+                default:
+                    return false;
             }
         }
 
@@ -275,7 +324,8 @@ namespace PlcLibrary.AllenBradley
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
             var tagClient = GetClientOrThrow("AllenBradley");
-            if (values.Count == 0) return [];
+            if (values.Count == 0)
+                return [];
 
             var entryList = values.ToList();
             var results = new DriverResult[entryList.Count];

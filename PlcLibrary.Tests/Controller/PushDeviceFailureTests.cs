@@ -94,7 +94,8 @@ public class PushDeviceFailureTests
             // 这里同时等待「已发生至少 3 次重建」与「稳定处于故障态且带最后错误」，避免与监督循环竞态。
             await WaitUntilAsync(async () =>
             {
-                if (FailingPushDriver.Created < 3) return false;
+                if (FailingPushDriver.Created < 3)
+                    return false;
                 var health = await scheduler.GetDeviceHealthAsync();
                 return health is [{ IsRunning: false, Error: not null }] h
                        && h[0].Error!.Contains("simulated push connect failure", StringComparison.Ordinal);
@@ -140,7 +141,8 @@ public class PushDeviceFailureTests
         var deadline = DateTime.UtcNow + timeout;
         while (!await condition())
         {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("条件未在超时时间内满足");
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException("条件未在超时时间内满足");
             await Task.Delay(20);
         }
     }

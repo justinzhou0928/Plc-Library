@@ -1,3 +1,5 @@
+using System.IO;
+using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -5,8 +7,6 @@ using NModbus;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.Modbus;
-using System.IO;
-using System.Net.Sockets;
 
 namespace PlcLibrary.Tests.Modbus;
 

@@ -1,12 +1,12 @@
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using Microsoft.Extensions.Logging.Abstractions;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.Mitsubishi;
 using PlcLibrary.Tests.Simulators;
-using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 
 namespace PlcLibrary.Tests.Mitsubishi;
 
@@ -155,7 +155,8 @@ public class MitsubishiDriverSimulatorTests
     public async Task ReadAsync_FiveContiguousShorts_SingleRequest()
     {
         await using var sim = new McProtocolSimServer();
-        for (ushort i = 0; i < 5; i++) sim.SetWord((ushort)(100 + i), (ushort)(10 + i));
+        for (ushort i = 0; i < 5; i++)
+            sim.SetWord((ushort)(100 + i), (ushort)(10 + i));
         await using var driver = CreateDriver(sim.Port);
         await driver.ConnectAsync();
 

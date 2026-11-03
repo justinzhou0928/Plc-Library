@@ -1,7 +1,7 @@
-using PlcLibrary.General.Configuration;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.Controller.Engine
 {
@@ -30,7 +30,8 @@ namespace PlcLibrary.Controller.Engine
         {
             get
             {
-                if (!IsRunning || collector is not ICollectorHeartbeat heartbeat) return false;
+                if (!IsRunning || collector is not ICollectorHeartbeat heartbeat)
+                    return false;
                 return DateTime.UtcNow - heartbeat.LastActivityUtc > heartbeat.StallTimeout;
             }
         }
@@ -46,7 +47,8 @@ namespace PlcLibrary.Controller.Engine
             CancellationTokenSource? oldCts;
             lock (_gate)
             {
-                if (_loopTask is not null) return Task.CompletedTask;
+                if (_loopTask is not null)
+                    return Task.CompletedTask;
                 oldCts = _cts;
                 _cts = new CancellationTokenSource();
                 _lastError = null;
@@ -62,7 +64,8 @@ namespace PlcLibrary.Controller.Engine
             CancellationTokenSource? cts;
             lock (_gate)
             {
-                if (_loopTask is null) return;
+                if (_loopTask is null)
+                    return;
                 cts = _cts;
                 loop = _loopTask;
             }
@@ -86,12 +89,14 @@ namespace PlcLibrary.Controller.Engine
 
             if (loop.IsCompleted)
             {
-                try { await loop.ConfigureAwait(false); }
+                try
+                { await loop.ConfigureAwait(false); }
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
                 {
                     // 采集循环失败不应让停机流程抛异常（否则 StopAsync 会沿宿主生命周期冒泡）
-                    lock (_gate) _lastError = ex;
+                    lock (_gate)
+                        _lastError = ex;
                 }
             }
             else
@@ -103,7 +108,8 @@ namespace PlcLibrary.Controller.Engine
                 }
             }
 
-            lock (_gate) { if (ReferenceEquals(_loopTask, loop)) _loopTask = null; }
+            lock (_gate)
+            { if (ReferenceEquals(_loopTask, loop)) _loopTask = null; }
         }
 
         public async ValueTask DisposeAsync()
@@ -121,12 +127,14 @@ namespace PlcLibrary.Controller.Engine
 
         private async Task ExecuteAsync(CancellationToken ct)
         {
-            try { await collector.ExecuteAsync(ct).ConfigureAwait(false); }
+            try
+            { await collector.ExecuteAsync(ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
                 // 记录并结束循环：由 TaskScheduler 的监督循环按退避策略重建执行器
-                lock (_gate) _lastError = ex;
+                lock (_gate)
+                    _lastError = ex;
             }
         }
     }

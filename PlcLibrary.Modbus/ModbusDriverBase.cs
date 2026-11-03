@@ -1,15 +1,15 @@
-﻿using Microsoft.Extensions.Logging;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using NModbus;
 using PlcLibrary.DriverDomain;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.General.Configuration;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace PlcLibrary.Modbus
 {
@@ -50,7 +50,8 @@ namespace PlcLibrary.Modbus
             try
             {
                 Disconnect(ct);
-                lock (_stateLock) _status = DriverStatus.Connecting;
+                lock (_stateLock)
+                    _status = DriverStatus.Connecting;
 
                 var newMaster = await _masterFactory(ct).ConfigureAwait(false);
 
@@ -62,12 +63,15 @@ namespace PlcLibrary.Modbus
                     _status = DriverStatus.Connected;
                 }
 
-                try { oldMaster?.Dispose(); } catch { }
+                try
+                { oldMaster?.Dispose(); }
+                catch { }
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
-                lock (_stateLock) _status = DriverStatus.Faulted;
+                lock (_stateLock)
+                    _status = DriverStatus.Faulted;
                 ModbusLog.LogConnectFailed(_logger, ex);
                 throw;
             }
@@ -88,7 +92,9 @@ namespace PlcLibrary.Modbus
                 _master = null;
                 _status = DriverStatus.Disconnected;
             }
-            try { oldMaster?.Dispose(); } catch { }
+            try
+            { oldMaster?.Dispose(); }
+            catch { }
         }
 
         public async Task<bool> TryReconnectAsync(CancellationToken ct = default)
@@ -101,7 +107,8 @@ namespace PlcLibrary.Modbus
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                lock (_stateLock) _status = DriverStatus.Faulted;
+                lock (_stateLock)
+                    _status = DriverStatus.Faulted;
                 return false;
             }
         }
@@ -109,7 +116,8 @@ namespace PlcLibrary.Modbus
         public async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            if (points.Length == 0) return [];
+            if (points.Length == 0)
+                return [];
             var master = GetMasterOrThrow();
             var results = new DriverResult[points.Length];
 
@@ -140,7 +148,8 @@ namespace PlcLibrary.Modbus
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            if (values.Count == 0) return [];
+            if (values.Count == 0)
+                return [];
             var master = GetMasterOrThrow();
             var entryList = values.ToList();
             var results = new DriverResult[entryList.Count];
@@ -496,36 +505,36 @@ namespace PlcLibrary.Modbus
             switch (group.Type)
             {
                 case ModbusType.Coil:
-                {
-                    var coils = await master.ReadCoilsAsync(_slaveId, group.Start, (ushort)group.Count)
-                        .ConfigureAwait(false);
-                    AssignBitResults(points, group, coils, results);
-                    break;
-                }
+                    {
+                        var coils = await master.ReadCoilsAsync(_slaveId, group.Start, (ushort)group.Count)
+                            .ConfigureAwait(false);
+                        AssignBitResults(points, group, coils, results);
+                        break;
+                    }
 
                 case ModbusType.DiscreteInput:
-                {
-                    var inputs = await master.ReadInputsAsync(_slaveId, group.Start, (ushort)group.Count)
-                        .ConfigureAwait(false);
-                    AssignBitResults(points, group, inputs, results);
-                    break;
-                }
+                    {
+                        var inputs = await master.ReadInputsAsync(_slaveId, group.Start, (ushort)group.Count)
+                            .ConfigureAwait(false);
+                        AssignBitResults(points, group, inputs, results);
+                        break;
+                    }
 
                 case ModbusType.InputRegister:
-                {
-                    var registers = await master.ReadInputRegistersAsync(_slaveId, group.Start, (ushort)group.Count)
-                        .ConfigureAwait(false);
-                    AssignRegisterResults(points, group, registers, results);
-                    break;
-                }
+                    {
+                        var registers = await master.ReadInputRegistersAsync(_slaveId, group.Start, (ushort)group.Count)
+                            .ConfigureAwait(false);
+                        AssignRegisterResults(points, group, registers, results);
+                        break;
+                    }
 
                 case ModbusType.HoldingRegister:
-                {
-                    var registers = await master.ReadHoldingRegistersAsync(_slaveId, group.Start, (ushort)group.Count)
-                        .ConfigureAwait(false);
-                    AssignRegisterResults(points, group, registers, results);
-                    break;
-                }
+                    {
+                        var registers = await master.ReadHoldingRegistersAsync(_slaveId, group.Start, (ushort)group.Count)
+                            .ConfigureAwait(false);
+                        AssignRegisterResults(points, group, registers, results);
+                        break;
+                    }
             }
         }
 
@@ -593,7 +602,8 @@ namespace PlcLibrary.Modbus
         private void MarkFaultedIfTransport(Exception ex)
         {
             if (TransportFailureDetector.IsTransportFailure(ex))
-                lock (_stateLock) _status = DriverStatus.Faulted;
+                lock (_stateLock)
+                    _status = DriverStatus.Faulted;
         }
 
         internal static bool TryParseAddress(string address, out ModbusType type, out ushort offset)
@@ -601,10 +611,12 @@ namespace PlcLibrary.Modbus
             type = ModbusType.Coil;
             offset = 0;
 
-            if (string.IsNullOrEmpty(address) || address.Length < 2) return false;
+            if (string.IsNullOrEmpty(address) || address.Length < 2)
+                return false;
 
             var prefix = address[0];
-            if (!int.TryParse(address.Substring(1), out var num) || num < 1 || num > AddressSpace) return false;
+            if (!int.TryParse(address.Substring(1), out var num) || num < 1 || num > AddressSpace)
+                return false;
 
             switch (prefix)
             {

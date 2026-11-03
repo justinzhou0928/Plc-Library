@@ -91,7 +91,9 @@ public class ModbusTransportLoopbackTests
 
         await driver.DisposeAsync();
         cts.Cancel();
-        try { await listen; } catch (Exception) { }
+        try
+        { await listen; }
+        catch (Exception) { }
         listener.Dispose();
     }
 
@@ -124,7 +126,8 @@ public class ModbusTransportLoopbackTests
 
         var sw = Stopwatch.StartNew();
         Exception? connectError = null;
-        try { await driver.ConnectAsync(); }
+        try
+        { await driver.ConnectAsync(); }
         catch (Exception ex) { connectError = ex; }
 
         // 串口在 ConnectAsync 阶段即被打开：端口不存在/被占用必须直接失败并置 Faulted，

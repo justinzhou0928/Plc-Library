@@ -1,8 +1,3 @@
-using Microsoft.Extensions.Options;
-using PlcLibrary.DriverDomain.Models;
-using PlcLibrary.Monitor.Interfaces;
-using PlcLibrary.Monitor.Models;
-using PlcLibrary.Pipeline.Interfaces;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -11,6 +6,11 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Options;
+using PlcLibrary.DriverDomain.Models;
+using PlcLibrary.Monitor.Interfaces;
+using PlcLibrary.Monitor.Models;
+using PlcLibrary.Pipeline.Interfaces;
 
 namespace PlcLibrary.Monitor.Engine
 {
@@ -98,7 +98,8 @@ namespace PlcLibrary.Monitor.Engine
 
         internal async Task RunEvictionAsync(CancellationToken ct)
         {
-            if (_entryIdleTimeout <= TimeSpan.Zero) return;
+            if (_entryIdleTimeout <= TimeSpan.Zero)
+                return;
 
             using var timer = new PeriodicTimer(EvictionPeriod);
             try
@@ -111,7 +112,8 @@ namespace PlcLibrary.Monitor.Engine
 
         internal void DisposeResources()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
             foreach (var (_, sub) in _subscribers)
                 sub.Channel.Writer.TryComplete();
             _subscribers.Clear();
@@ -120,12 +122,14 @@ namespace PlcLibrary.Monitor.Engine
 
         internal void EvictStaleEntries()
         {
-            if (Volatile.Read(ref _disposed) != 0 || _entryIdleTimeout <= TimeSpan.Zero) return;
+            if (Volatile.Read(ref _disposed) != 0 || _entryIdleTimeout <= TimeSpan.Zero)
+                return;
 
             var cutoff = DateTime.UtcNow.Ticks - _entryIdleTimeout.Ticks;
             foreach (var (key, entry) in _entries)
             {
-                if (entry.LastSeenTicks >= cutoff) continue;
+                if (entry.LastSeenTicks >= cutoff)
+                    continue;
                 // 值匹配移除：并发刚更新的条目不会被误删
                 _entries.TryRemove(new KeyValuePair<PlcPointId, Entry>(key, entry));
             }
@@ -145,7 +149,8 @@ namespace PlcLibrary.Monitor.Engine
                 {
                     var valueChanged = Changed(existing.Result, result);
                     var updated = valueChanged ? new Entry(result, now) : existing with { LastSeenTicks = now };
-                    if (!_entries.TryUpdate(key, updated, existing)) continue;
+                    if (!_entries.TryUpdate(key, updated, existing))
+                        continue;
                     changed = valueChanged;
                     return true;
                 }
@@ -160,11 +165,13 @@ namespace PlcLibrary.Monitor.Engine
 
         private void FanOut(PlcPointId key, DriverResult result)
         {
-            if (_subscribers.IsEmpty) return;
+            if (_subscribers.IsEmpty)
+                return;
 
             foreach (var (_, sub) in _subscribers)
             {
-                if (!Matches(sub, key)) continue;
+                if (!Matches(sub, key))
+                    continue;
                 sub.Channel.Writer.TryWrite(result);
             }
         }

@@ -1,3 +1,8 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PlcLibrary.Controller.Engine;
@@ -10,11 +15,6 @@ using PlcLibrary.General;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.Pipeline.Interfaces;
 using Polly;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace PlcLibrary.Controller.Collectors
 {
@@ -144,9 +144,11 @@ namespace PlcLibrary.Controller.Collectors
 
         public async ValueTask DisposeAsync()
         {
-            try { await _driver.StopPushingAsync(default).ConfigureAwait(false); }
+            try
+            { await _driver.StopPushingAsync(default).ConfigureAwait(false); }
             catch { }
-            try { await _driver.DisposeAsync().ConfigureAwait(false); }
+            try
+            { await _driver.DisposeAsync().ConfigureAwait(false); }
             catch { }
             // 弹性管线随采集器一并释放（Polly 管线由 GC 回收，无显式 Dispose）
         }

@@ -1,8 +1,8 @@
+using System.Net;
+using System.Net.Sockets;
 using Opc.Ua;
 using Opc.Ua.Configuration;
 using Opc.Ua.Server;
-using System.Net;
-using System.Net.Sockets;
 
 namespace PlcLibrary.Tests.Simulators;
 
@@ -53,19 +53,25 @@ internal sealed class OpcUaTestServer : IAsyncDisposable
     {
         if (_application is not null)
         {
-            try { await _application.StopAsync().ConfigureAwait(false); } catch { }
+            try
+            { await _application.StopAsync().ConfigureAwait(false); }
+            catch { }
             _application = null;
         }
 
         if (_server is not null)
         {
-            try { _server.Dispose(); } catch { }
+            try
+            { _server.Dispose(); }
+            catch { }
             _server = null;
         }
 
         if (_pkiRoot is not null && Directory.Exists(_pkiRoot))
         {
-            try { Directory.Delete(_pkiRoot, recursive: true); } catch { }
+            try
+            { Directory.Delete(_pkiRoot, recursive: true); }
+            catch { }
         }
     }
 

@@ -1,6 +1,6 @@
+using System;
 using PlcLibrary.DriverDomain.Parser;
 using S7.Net;
-using System;
 
 namespace PlcLibrary.S7
 {

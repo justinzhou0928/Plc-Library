@@ -1,15 +1,3 @@
-using Microsoft.Extensions.Logging;
-using Snet.Core;
-using Snet.Model.data;
-using Snet.Model.@enum;
-using Snet.Mitsubishi;
-using PlcLibrary.DriverDomain;
-using PlcLibrary.DriverDomain.Attributes;
-using PlcLibrary.DriverDomain.Enums;
-using PlcLibrary.DriverDomain.Interfaces;
-using PlcLibrary.DriverDomain.Models;
-using PlcLibrary.DriverDomain.Parser;
-using PlcLibrary.General.Configuration;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -18,6 +6,18 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using PlcLibrary.DriverDomain;
+using PlcLibrary.DriverDomain.Attributes;
+using PlcLibrary.DriverDomain.Enums;
+using PlcLibrary.DriverDomain.Interfaces;
+using PlcLibrary.DriverDomain.Models;
+using PlcLibrary.DriverDomain.Parser;
+using PlcLibrary.General.Configuration;
+using Snet.Core;
+using Snet.Mitsubishi;
+using Snet.Model.data;
+using Snet.Model.@enum;
 
 namespace PlcLibrary.Mitsubishi
 {
@@ -86,8 +86,12 @@ namespace PlcLibrary.Mitsubishi
                 SetState(null, DriverStatus.Faulted);
                 if (operate is not null)
                 {
-                    try { await operate.OffAsync().ConfigureAwait(false); } catch { }
-                    try { operate.Dispose(); } catch { }
+                    try
+                    { await operate.OffAsync().ConfigureAwait(false); }
+                    catch { }
+                    try
+                    { operate.Dispose(); }
+                    catch { }
                 }
                 throw;
             }
@@ -99,9 +103,11 @@ namespace PlcLibrary.Mitsubishi
 
             if (old is not null)
             {
-                try { await old.OffAsync().ConfigureAwait(false); }
+                try
+                { await old.OffAsync().ConfigureAwait(false); }
                 catch { }
-                try { old.Dispose(); }
+                try
+                { old.Dispose(); }
                 catch { }
             }
         }
@@ -119,7 +125,8 @@ namespace PlcLibrary.Mitsubishi
         public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             var operate = GetClientOrThrow("Mitsubishi");
-            if (points.Length == 0) return [];
+            if (points.Length == 0)
+                return [];
 
             var results = new DriverResult[points.Length];
             var plans = BuildReadPoints(points, results);
@@ -140,7 +147,8 @@ namespace PlcLibrary.Mitsubishi
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
             var operate = GetClientOrThrow("Mitsubishi");
-            if (values.Count == 0) return [];
+            if (values.Count == 0)
+                return [];
 
             var entryList = values.ToList();
             var results = new DriverResult[entryList.Count];
@@ -175,7 +183,8 @@ namespace PlcLibrary.Mitsubishi
 
                     for (var i = 0; i < entryList.Count; i++)
                     {
-                        if (results[i].Status == QualityCode.BadConfigError) continue; // 重复地址/非法地址已在前面标记
+                        if (results[i].Status == QualityCode.BadConfigError)
+                            continue; // 重复地址/非法地址已在前面标记
                         results[i] = result.Status
                             ? DriverResult.Good(entryList[i].Key.Address, null)
                             : DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadCommFailure,
@@ -294,7 +303,8 @@ namespace PlcLibrary.Mitsubishi
                     var maxElements = Math.Max(1, MaxWordsPerRead / plan.Words);
                     if (current.Count == 0 || plan.Word != next || current.Count >= maxElements)
                     {
-                        if (current.Count > 0) groups.Add(current);
+                        if (current.Count > 0)
+                            groups.Add(current);
                         current = [plan];
                     }
                     else
@@ -305,7 +315,8 @@ namespace PlcLibrary.Mitsubishi
                     next = plan.Word + plan.Words;
                 }
 
-                if (current.Count > 0) groups.Add(current);
+                if (current.Count > 0)
+                    groups.Add(current);
             }
 
             return groups;
@@ -326,7 +337,8 @@ namespace PlcLibrary.Mitsubishi
                 {
                     if (current.Count == 0 || plan.Word >= end + MaxWordsPerRead)
                     {
-                        if (current.Count > 0) groups.Add(current);
+                        if (current.Count > 0)
+                            groups.Add(current);
                         current = [plan];
                         end = plan.Word + 1;
                     }
@@ -337,7 +349,8 @@ namespace PlcLibrary.Mitsubishi
                     }
                 }
 
-                if (current.Count > 0) groups.Add(current);
+                if (current.Count > 0)
+                    groups.Add(current);
             }
 
             return groups;
@@ -505,7 +518,8 @@ namespace PlcLibrary.Mitsubishi
         private static string? NormalizeWriteAddress(TagPointConfiguration point, out string? error)
         {
             error = null;
-            if (DataTypeMapper.Resolve(point.DataType) != typeof(bool)) return point.Address;
+            if (DataTypeMapper.Resolve(point.DataType) != typeof(bool))
+                return point.Address;
 
             if (!TryParseWordDeviceBitAddress(point.Address, out var wordAddress, out var bitIndex, out error))
                 return point.Address;
@@ -527,15 +541,18 @@ namespace PlcLibrary.Mitsubishi
             error = null;
 
             var match = WordDeviceAddressPattern.Match(address);
-            if (!match.Success) return false;
+            if (!match.Success)
+                return false;
 
             var device = match.Groups["dev"].Value.ToUpperInvariant();
-            if (device is not ("D" or "W" or "R" or "ZR")) return false;
+            if (device is not ("D" or "W" or "R" or "ZR"))
+                return false;
 
             var word = int.Parse(match.Groups["word"].Value, CultureInfo.InvariantCulture);
             wordAddress = string.Concat(device, word.ToString(CultureInfo.InvariantCulture));
 
-            if (!match.Groups["bit"].Success) return true;
+            if (!match.Groups["bit"].Success)
+                return true;
 
             if (!int.TryParse(match.Groups["bit"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out bitIndex)
                 || bitIndex > 15)

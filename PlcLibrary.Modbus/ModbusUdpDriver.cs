@@ -1,8 +1,8 @@
-﻿using Microsoft.Extensions.Logging;
+using System.Net.Sockets;
+using Microsoft.Extensions.Logging;
 using NModbus;
 using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.General.Configuration;
-using System.Net.Sockets;
 
 namespace PlcLibrary.Modbus
 {

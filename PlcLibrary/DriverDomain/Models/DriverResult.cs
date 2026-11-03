@@ -1,5 +1,5 @@
-using PlcLibrary.DriverDomain.Enums;
 using System;
+using PlcLibrary.DriverDomain.Enums;
 
 namespace PlcLibrary.DriverDomain.Models
 {

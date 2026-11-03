@@ -1,12 +1,3 @@
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using PlcLibrary.DriverDomain.Enums;
-using PlcLibrary.DriverDomain.Models;
-using PlcLibrary.General;
-using PlcLibrary.Pipeline.Interfaces;
-using PlcLibrary.Pipeline.Models;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -16,6 +7,15 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using PlcLibrary.DriverDomain.Enums;
+using PlcLibrary.DriverDomain.Models;
+using PlcLibrary.General;
+using PlcLibrary.Pipeline.Interfaces;
+using PlcLibrary.Pipeline.Models;
 
 namespace PlcLibrary.Pipeline.Engine
 {
@@ -84,7 +84,8 @@ namespace PlcLibrary.Pipeline.Engine
 
         public async ValueTask HandleAsync(DriverResult result, CancellationToken ct)
         {
-            if (_channel.Writer.TryWrite(result)) return;
+            if (_channel.Writer.TryWrite(result))
+                return;
 
             if (_enqueueTimeout <= TimeSpan.Zero)
             {
@@ -237,7 +238,8 @@ namespace PlcLibrary.Pipeline.Engine
 
         private static void CancelQuietly(CancellationTokenSource? cts)
         {
-            try { cts?.Cancel(); }
+            try
+            { cts?.Cancel(); }
             catch { }
         }
     }

@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -9,7 +10,6 @@ using PlcLibrary.General;
 using PlcLibrary.Pipeline.Engine;
 using PlcLibrary.Pipeline.Interfaces;
 using PlcLibrary.Pipeline.Models;
-using System.Diagnostics.Metrics;
 
 namespace PlcLibrary.Tests.Pipeline;
 

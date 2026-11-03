@@ -1,10 +1,10 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging.Abstractions;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.OpcUa;
 using PlcLibrary.Tests.Simulators;
-using System.Collections.Concurrent;
 
 namespace PlcLibrary.Tests.OpcUa;
 
@@ -143,7 +143,9 @@ public class OpcUaDriverDataPlaneTests
             var result = Assert.Single(received);
             Assert.Equal(QualityCode.BadConfigError, result.Status);
             Assert.Equal("not a node id", result.Address);
-            try { await pushTask; } catch (OperationCanceledException) { }
+            try
+            { await pushTask; }
+            catch (OperationCanceledException) { }
         }
         finally
         {
@@ -170,7 +172,8 @@ public class OpcUaDriverDataPlaneTests
                 if (result.Status == QualityCode.Good && result.Value is DateTime time)
                 {
                     received.Enqueue(time);
-                    if (received.Count >= 2) pushCts.Cancel();
+                    if (received.Count >= 2)
+                        pushCts.Cancel();
                 }
                 return ValueTask.CompletedTask;
             },
@@ -183,7 +186,9 @@ public class OpcUaDriverDataPlaneTests
                 await Task.Delay(50);
 
             Assert.True(received.Count >= 2, $"未收到足够的订阅通知，实际 {received.Count}");
-            try { await pushTask; } catch (OperationCanceledException) { }
+            try
+            { await pushTask; }
+            catch (OperationCanceledException) { }
         }
         finally
         {

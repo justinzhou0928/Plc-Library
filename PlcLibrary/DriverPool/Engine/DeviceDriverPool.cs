@@ -1,3 +1,11 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PlcLibrary.DriverDomain.Interfaces;
@@ -9,14 +17,6 @@ using Polly;
 using Polly.CircuitBreaker;
 using Polly.Retry;
 using Polly.Timeout;
-using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace PlcLibrary.DriverPool.Engine
 {
@@ -274,7 +274,8 @@ namespace PlcLibrary.DriverPool.Engine
 
         private static async Task DisposeDriverAsync(IProtocolDriver driver)
         {
-            try { await driver.DisposeAsync().ConfigureAwait(false); }
+            try
+            { await driver.DisposeAsync().ConfigureAwait(false); }
             catch { }
         }
 
@@ -291,12 +292,14 @@ namespace PlcLibrary.DriverPool.Engine
 
         public async ValueTask DisposeAsync()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
 
             _cleanupCts?.Cancel();
             if (_cleanupTask is not null)
             {
-                try { await _cleanupTask.ConfigureAwait(false); }
+                try
+                { await _cleanupTask.ConfigureAwait(false); }
                 catch { }
             }
             _cleanupCts?.Dispose();
@@ -317,7 +320,8 @@ namespace PlcLibrary.DriverPool.Engine
             {
                 while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
                 {
-                    try { await CleanupIdlePoolsAsync().ConfigureAwait(false); }
+                    try
+                    { await CleanupIdlePoolsAsync().ConfigureAwait(false); }
                     catch (Exception ex)
                     {
                         PoolLog.LogPoolCleanupFailed(_loggerFactory.CreateLogger<DeviceDriverPool>(), ex);
@@ -330,16 +334,20 @@ namespace PlcLibrary.DriverPool.Engine
         /// <summary>回收空置超过 PoolIdleTimeout 的连接池及其弹性管线（由定时器周期调用，也可测试直接调用）。</summary>
         internal async Task CleanupIdlePoolsAsync()
         {
-            if (Volatile.Read(ref _disposed) != 0 || _options.PoolIdleTimeout <= TimeSpan.Zero) return;
+            if (Volatile.Read(ref _disposed) != 0 || _options.PoolIdleTimeout <= TimeSpan.Zero)
+                return;
 
             foreach (var (key, lazy) in _pools)
             {
-                if (!lazy.IsValueCreated) continue;
+                if (!lazy.IsValueCreated)
+                    continue;
                 var pool = lazy.Value;
-                if (!pool.IsIdleBeyond(_options.PoolIdleTimeout)) continue;
+                if (!pool.IsIdleBeyond(_options.PoolIdleTimeout))
+                    continue;
 
                 // 先原子进入「回收中」：有并发借用时放弃本轮回，避免与 Acquire 竞争
-                if (!pool.TryBeginRecycle()) continue;
+                if (!pool.TryBeginRecycle())
+                    continue;
 
                 if (_pools.TryRemove(key, out _))
                 {
@@ -381,7 +389,8 @@ namespace PlcLibrary.DriverPool.Engine
 
         private IDriverFactory ResolveFactory(string protocol)
         {
-            if (_factoriesByProtocol.TryGetValue(protocol, out var factory)) return factory;
+            if (_factoriesByProtocol.TryGetValue(protocol, out var factory))
+                return factory;
             throw new InvalidOperationException($"No driver factory registered for protocol '{protocol}'.");
         }
     }

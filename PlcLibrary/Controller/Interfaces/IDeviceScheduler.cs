@@ -1,8 +1,8 @@
-using PlcLibrary.Controller.Models;
-using PlcLibrary.General.Configuration;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using PlcLibrary.Controller.Models;
+using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.Controller.Interfaces
 {

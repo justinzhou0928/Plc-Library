@@ -1,13 +1,13 @@
 using Microsoft.Extensions.DependencyInjection;
-using PlcLibrary.DriverDomain.Interfaces;
-using PlcLibrary.Extensions;
 using PlcLibrary.AllenBradley;
 using PlcLibrary.Bacnet;
+using PlcLibrary.DriverDomain.Interfaces;
+using PlcLibrary.Extensions;
 using PlcLibrary.Mitsubishi;
-using PlcLibrary.Omron;
-using PlcLibrary.S7;
 using PlcLibrary.Modbus;
+using PlcLibrary.Omron;
 using PlcLibrary.OpcUa;
+using PlcLibrary.S7;
 
 namespace PlcLibrary.Tests.Drivers;
 

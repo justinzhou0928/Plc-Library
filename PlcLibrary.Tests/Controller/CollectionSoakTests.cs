@@ -1,10 +1,9 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using PlcLibrary.Controller.Collectors;
 using PlcLibrary.Controller.Engine;
-using TaskScheduler = PlcLibrary.Controller.Engine.TaskScheduler;
 using PlcLibrary.Controller.Interfaces;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
@@ -13,6 +12,7 @@ using PlcLibrary.DriverPool.Engine;
 using PlcLibrary.DriverPool.Models;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.Pipeline.Interfaces;
+using TaskScheduler = PlcLibrary.Controller.Engine.TaskScheduler;
 
 namespace PlcLibrary.Tests.Controller;
 

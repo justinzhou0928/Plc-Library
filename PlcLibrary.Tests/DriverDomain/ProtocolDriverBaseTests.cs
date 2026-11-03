@@ -49,8 +49,10 @@ public class ProtocolDriverBaseTests
 
         public override Task ConnectAsync(CancellationToken ct = default)
         {
-            if (CancelConnect) throw new OperationCanceledException(ct);
-            if (FailConnect) throw new InvalidOperationException("connect failed");
+            if (CancelConnect)
+                throw new OperationCanceledException(ct);
+            if (FailConnect)
+                throw new InvalidOperationException("connect failed");
             SetState(new object(), DriverStatus.Connected);
             return Task.CompletedTask;
         }

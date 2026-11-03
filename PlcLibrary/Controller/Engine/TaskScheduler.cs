@@ -1,3 +1,10 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -8,13 +15,6 @@ using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.General;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.Pipeline.Interfaces;
-using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace PlcLibrary.Controller.Engine
 {
@@ -53,7 +53,8 @@ namespace PlcLibrary.Controller.Engine
 
         public async Task ApplyDevicesAsync(IReadOnlyList<DeviceConfiguration> devices, CancellationToken ct = default)
         {
-            if (Volatile.Read(ref _stopping) != 0) return;
+            if (Volatile.Read(ref _stopping) != 0)
+                return;
 
             await _applyLock.WaitAsync(ct).ConfigureAwait(false);
             try
@@ -61,8 +62,10 @@ namespace PlcLibrary.Controller.Engine
                 Dictionary<string, DeviceConfiguration> desired = [];
                 foreach (var d in devices)
                 {
-                    if (!d.Enabled) continue;
-                    if (!d.Validate(out var errors)) { LogValidationErrors(d.Id, errors); continue; }
+                    if (!d.Enabled)
+                        continue;
+                    if (!d.Validate(out var errors))
+                    { LogValidationErrors(d.Id, errors); continue; }
                     if (!_factories.ContainsKey(d.Protocol))
                     {
                         ControllerLog.LogProtocolUnregistered(_logger, d.Id, d.Protocol);
@@ -85,7 +88,8 @@ namespace PlcLibrary.Controller.Engine
                 foreach (var (id, device) in desired)
                 {
                     // 停机可能发生在 Apply 等待驱动创建/连接期间；停止后再启动会留下无人回收的执行器。
-                    if (Volatile.Read(ref _stopping) != 0) return;
+                    if (Volatile.Read(ref _stopping) != 0)
+                        return;
                     ct.ThrowIfCancellationRequested();
                     if (!_actuators.TryGetValue(id, out _))
                     {
@@ -142,7 +146,8 @@ namespace PlcLibrary.Controller.Engine
             {
                 while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
                 {
-                    if (Volatile.Read(ref _stopping) != 0) return;
+                    if (Volatile.Read(ref _stopping) != 0)
+                        return;
                     try
                     {
                         await RestartFaultedActuatorsAsync(ct).ConfigureAwait(false);
@@ -173,10 +178,12 @@ namespace PlcLibrary.Controller.Engine
                         continue;
                     }
 
-                    if (!_activeConfigs.TryGetValue(id, out var device)) continue;
+                    if (!_activeConfigs.TryGetValue(id, out var device))
+                        continue;
 
                     var state = _restarts.GetOrAdd(id, static _ => new RestartState());
-                    if (now < state.NextAllowedTicks) continue;
+                    if (now < state.NextAllowedTicks)
+                        continue;
 
                     state.Attempts++;
                     var backoffMs = Math.Min(
@@ -211,7 +218,8 @@ namespace PlcLibrary.Controller.Engine
             Interlocked.Exchange(ref _stopping, 1);
 
             var actuators = _actuators.Values.ToArray();
-            if (actuators.Length == 0) return;
+            if (actuators.Length == 0)
+                return;
 
             var tasks = new Task[actuators.Length];
             for (var i = 0; i < actuators.Length; i++)
@@ -220,7 +228,8 @@ namespace PlcLibrary.Controller.Engine
 
             for (var i = 0; i < actuators.Length; i++)
             {
-                try { await actuators[i].DisposeAsync().ConfigureAwait(false); }
+                try
+                { await actuators[i].DisposeAsync().ConfigureAwait(false); }
                 catch (OperationCanceledException) { }
                 catch (Exception ex) { ControllerLog.LogCollectionFailed(_logger, ex, actuators[i].Device.Id); }
             }
@@ -277,7 +286,8 @@ namespace PlcLibrary.Controller.Engine
             IDriverFactory factory, DeviceConfiguration device, CancellationToken ct)
         {
             var probe = await factory.CreateAsync(device, ct).ConfigureAwait(false);
-            try { await probe.DisposeAsync().ConfigureAwait(false); }
+            try
+            { await probe.DisposeAsync().ConfigureAwait(false); }
             catch { }
         }
 

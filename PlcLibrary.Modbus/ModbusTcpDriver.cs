@@ -1,11 +1,11 @@
-﻿using Microsoft.Extensions.Logging;
-using NModbus;
-using PlcLibrary.DriverDomain.Attributes;
-using PlcLibrary.General.Configuration;
 using System;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using NModbus;
+using PlcLibrary.DriverDomain.Attributes;
+using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.Modbus
 {
@@ -14,7 +14,8 @@ namespace PlcLibrary.Modbus
     {
         public ModbusTcpDriver(ILogger<ModbusTcpDriver> logger, DeviceConfiguration device)
             : base(logger, ModbusDriverConfig.Parse(device.ConnectionString),
-                ct => CreateMasterAsync(device.ConnectionString, ct)) { }
+                ct => CreateMasterAsync(device.ConnectionString, ct))
+        { }
 
         /// <summary>
         /// 异步建立 TCP 连接：不再在构造函数/同步方法里阻塞线程池线程，
@@ -33,7 +34,8 @@ namespace PlcLibrary.Modbus
             try
             {
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                if (config.Timeout > 0) timeoutCts.CancelAfter(config.Timeout);
+                if (config.Timeout > 0)
+                    timeoutCts.CancelAfter(config.Timeout);
 
                 await tcpClient.ConnectAsync(config.Host, config.Port, timeoutCts.Token).ConfigureAwait(false);
                 return new ModbusFactory().CreateMaster(tcpClient);

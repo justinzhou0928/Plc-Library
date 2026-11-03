@@ -11,7 +11,7 @@ namespace PlcLibrary.Modbus
     /// 只用于确定字长和解码方式；对外配置仍然是 <c>TagPointConfiguration.DataType</c>，不是第二套对外类型。
     /// </summary>
 
-/// <summary>
+    /// <summary>
     /// 字节序映射。AB 为恒等（大端），BA 为字内字节交换，CDAB 为字交换，DCBA 为全反；
     /// 64 位使用 8 字符排列（如 GHEFCDAB 表示 16 位字逆序）。
     /// BCL 的 <c>BinaryPrimitives</c> 只区分大小端，不提供 AB/BA/ABCD/CDAB/DCBA 这类任意字/字节排列，
@@ -280,37 +280,42 @@ namespace PlcLibrary.Modbus
             {
                 case TypeCode.UInt16:
                 case TypeCode.Int16:
-                {
-                    if (!TryToUInt64(value, out var raw, out error)) return false;
-                    BinaryPrimitives.WriteUInt16BigEndian(valueBytes, unchecked((ushort)raw));
-                    break;
-                }
+                    {
+                        if (!TryToUInt64(value, out var raw, out error))
+                            return false;
+                        BinaryPrimitives.WriteUInt16BigEndian(valueBytes, unchecked((ushort)raw));
+                        break;
+                    }
                 case TypeCode.UInt32:
                 case TypeCode.Int32:
-                {
-                    if (!TryToUInt64(value, out var raw, out error)) return false;
-                    BinaryPrimitives.WriteUInt32BigEndian(valueBytes, unchecked((uint)raw));
-                    break;
-                }
+                    {
+                        if (!TryToUInt64(value, out var raw, out error))
+                            return false;
+                        BinaryPrimitives.WriteUInt32BigEndian(valueBytes, unchecked((uint)raw));
+                        break;
+                    }
                 case TypeCode.UInt64:
                 case TypeCode.Int64:
-                {
-                    if (!TryToUInt64(value, out var raw, out error)) return false;
-                    BinaryPrimitives.WriteUInt64BigEndian(valueBytes, raw);
-                    break;
-                }
+                    {
+                        if (!TryToUInt64(value, out var raw, out error))
+                            return false;
+                        BinaryPrimitives.WriteUInt64BigEndian(valueBytes, raw);
+                        break;
+                    }
                 case TypeCode.Single:
-                {
-                    if (!TryToSingle(value, out var single, out error)) return false;
-                    BinaryPrimitives.WriteSingleBigEndian(valueBytes, single);
-                    break;
-                }
+                    {
+                        if (!TryToSingle(value, out var single, out error))
+                            return false;
+                        BinaryPrimitives.WriteSingleBigEndian(valueBytes, single);
+                        break;
+                    }
                 case TypeCode.Double:
-                {
-                    if (!TryToDouble(value, out var dbl, out error)) return false;
-                    BinaryPrimitives.WriteDoubleBigEndian(valueBytes, dbl);
-                    break;
-                }
+                    {
+                        if (!TryToDouble(value, out var dbl, out error))
+                            return false;
+                        BinaryPrimitives.WriteDoubleBigEndian(valueBytes, dbl);
+                        break;
+                    }
                 default:
                     error = $"Unsupported Modbus value kind '{kind}'";
                     return false;

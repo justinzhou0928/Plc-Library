@@ -155,8 +155,10 @@ public sealed class BacnetSimServer : IAsyncDisposable
     {
         Interlocked.Increment(ref _whoIsRequestCount);
 
-        if (lowLimit >= 0 && DeviceInstance < (uint)lowLimit) return;
-        if (highLimit >= 0 && DeviceInstance > (uint)highLimit) return;
+        if (lowLimit >= 0 && DeviceInstance < (uint)lowLimit)
+            return;
+        if (highLimit >= 0 && DeviceInstance > (uint)highLimit)
+            return;
 
         try
         {
@@ -171,7 +173,8 @@ public sealed class BacnetSimServer : IAsyncDisposable
     private void HandleReadPropertyMultiple(BacnetClient sender, BacnetAddress adr, byte invokeId,
         IList<BacnetReadAccessSpecification> specs, BacnetMaxSegments maxSegments)
     {
-        if (PauseResponses) return;
+        if (PauseResponses)
+            return;
 
         var results = new List<BacnetReadAccessResult>();
         lock (_gate)
@@ -223,7 +226,8 @@ public sealed class BacnetSimServer : IAsyncDisposable
     private void HandleReadProperty(BacnetClient sender, BacnetAddress adr, byte invokeId,
         BacnetObjectId objectId, BacnetPropertyReference property, BacnetMaxSegments maxSegments)
     {
-        if (PauseResponses) return;
+        if (PauseResponses)
+            return;
 
         lock (_gate)
         {
@@ -248,7 +252,8 @@ public sealed class BacnetSimServer : IAsyncDisposable
     private void HandleWriteProperty(BacnetClient sender, BacnetAddress adr, byte invokeId,
         BacnetObjectId objectId, BacnetPropertyValue value, BacnetMaxSegments maxSegments)
     {
-        if (PauseResponses) return;
+        if (PauseResponses)
+            return;
 
         lock (_gate)
         {

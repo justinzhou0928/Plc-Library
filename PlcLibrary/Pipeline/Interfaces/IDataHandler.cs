@@ -1,6 +1,6 @@
-﻿using PlcLibrary.DriverDomain.Models;
 using System.Threading;
 using System.Threading.Tasks;
+using PlcLibrary.DriverDomain.Models;
 
 namespace PlcLibrary.Pipeline.Interfaces
 {

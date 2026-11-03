@@ -37,7 +37,9 @@ public class PushCollectorTests
         finally
         {
             cts.Cancel();
-            try { await run.WaitAsync(TimeSpan.FromSeconds(5)); } catch (OperationCanceledException) { }
+            try
+            { await run.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (OperationCanceledException) { }
         }
     }
 

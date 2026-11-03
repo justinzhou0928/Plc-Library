@@ -51,13 +51,15 @@ internal sealed class S7SimServer : IAsyncDisposable
     /// <summary>在内存中构造 S7 STRING（2 字节头：最大长度、实际长度 + ASCII 数据）。</summary>
     public void SetString(int db, int startByte, int capacity, string value)
     {
-        if (value.Length > capacity) throw new ArgumentOutOfRangeException(nameof(value));
+        if (value.Length > capacity)
+            throw new ArgumentOutOfRangeException(nameof(value));
         var bytes = new byte[capacity + 2];
         bytes[0] = (byte)capacity;
         bytes[1] = (byte)value.Length;
         for (var i = 0; i < value.Length; i++)
         {
-            if (value[i] > 0x7F) throw new ArgumentException("模拟器仅支持 ASCII 字符串", nameof(value));
+            if (value[i] > 0x7F)
+                throw new ArgumentException("模拟器仅支持 ASCII 字符串", nameof(value));
             bytes[2 + i] = (byte)value[i];
         }
 
@@ -90,8 +92,10 @@ internal sealed class S7SimServer : IAsyncDisposable
         lock (_gate)
         {
             var memory = GetMemory(db);
-            if (value) memory[byteOffset] |= (byte)(1 << bit);
-            else memory[byteOffset] &= (byte)~(1 << bit);
+            if (value)
+                memory[byteOffset] |= (byte)(1 << bit);
+            else
+                memory[byteOffset] &= (byte)~(1 << bit);
         }
     }
 
@@ -123,10 +127,13 @@ internal sealed class S7SimServer : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
         _cts.Cancel();
         _listener.Stop();
-        try { await _acceptTask.ConfigureAwait(false); } catch { }
+        try
+        { await _acceptTask.ConfigureAwait(false); }
+        catch { }
         _cts.Dispose();
     }
 
@@ -149,7 +156,8 @@ internal sealed class S7SimServer : IAsyncDisposable
         while (!ct.IsCancellationRequested)
         {
             TcpClient client;
-            try { client = await _listener.AcceptTcpClientAsync(ct).ConfigureAwait(false); }
+            try
+            { client = await _listener.AcceptTcpClientAsync(ct).ConfigureAwait(false); }
             catch (Exception) { return; }
 
             Interlocked.Increment(ref _connections);
@@ -168,7 +176,8 @@ internal sealed class S7SimServer : IAsyncDisposable
                 while (!ct.IsCancellationRequested)
                 {
                     var frame = await ReadTpktAsync(stream, ct).ConfigureAwait(false);
-                    if (frame is null) return;
+                    if (frame is null)
+                        return;
                     _frames.Enqueue(Convert.ToHexString(frame));
 
                     // TPKT(4) + COTP：frame[4]=COTP 长度，frame[5]=0xE0 连接请求 / 0xF0 数据传输
@@ -178,7 +187,8 @@ internal sealed class S7SimServer : IAsyncDisposable
                         continue;
                     }
 
-                    if (frame.Length < 7 || frame[5] != 0xF0) continue;
+                    if (frame.Length < 7 || frame[5] != 0xF0)
+                        continue;
 
                     var request = frame[7..];
                     // 读请求被要求丢弃时直接关闭连接，模拟链路中断
@@ -189,7 +199,8 @@ internal sealed class S7SimServer : IAsyncDisposable
                     }
 
                     var response = HandleS7Pdu(request);
-                    if (response is null) return;
+                    if (response is null)
+                        return;
                     await stream.WriteAsync(BuildTpkt(response), ct).ConfigureAwait(false);
                 }
             }
@@ -199,15 +210,18 @@ internal sealed class S7SimServer : IAsyncDisposable
 
     private byte[]? HandleS7Pdu(byte[] pdu)
     {
-        if (pdu.Length < 10 || pdu[0] != 0x32) return null;
+        if (pdu.Length < 10 || pdu[0] != 0x32)
+            return null;
         var pduRef = BinaryPrimitives.ReadUInt16BigEndian(pdu.AsSpan(4, 2));
         var paramLength = BinaryPrimitives.ReadUInt16BigEndian(pdu.AsSpan(6, 2));
         var dataLength = BinaryPrimitives.ReadUInt16BigEndian(pdu.AsSpan(8, 2));
-        if (10 + paramLength + dataLength > pdu.Length) return null;
+        if (10 + paramLength + dataLength > pdu.Length)
+            return null;
 
         var parameters = pdu.AsSpan(10, paramLength).ToArray();
         var data = pdu.AsSpan(10 + paramLength, dataLength).ToArray();
-        if (parameters.Length == 0) return null;
+        if (parameters.Length == 0)
+            return null;
 
         return parameters[0] switch
         {
@@ -344,7 +358,8 @@ internal sealed class S7SimServer : IAsyncDisposable
                     {
                         var bitAddress = address + b;
                         var bitValue = (memory[bitAddress >> 3] >> (bitAddress & 7)) & 1;
-                        if (bitValue != 0) payload[b >> 3] |= (byte)(1 << (b & 7));
+                        if (bitValue != 0)
+                            payload[b >> 3] |= (byte)(1 << (b & 7));
                     }
                 }
                 else
@@ -381,7 +396,8 @@ internal sealed class S7SimServer : IAsyncDisposable
         for (var i = 0; i < itemCount; i++)
         {
             var offset = 2 + i * 12;
-            if (offset + 12 > parameters.Length || cursor + 4 > data.Length) break;
+            if (offset + 12 > parameters.Length || cursor + 4 > data.Length)
+                break;
 
             var transportSize = parameters[offset + 3];
             var count = BinaryPrimitives.ReadUInt16BigEndian(parameters.AsSpan(offset + 4, 2));
@@ -395,7 +411,8 @@ internal sealed class S7SimServer : IAsyncDisposable
             cursor += 4 + (payloadLength % 2 == 0 ? payloadLength : payloadLength + 1);
 
             results[i * 4] = 0xFF;
-            if (area != AreaDataBlock) { results[i * 4] = 0x0A; continue; }
+            if (area != AreaDataBlock)
+            { results[i * 4] = 0x0A; continue; }
 
             if (transportSize == 0x01)
             {
@@ -417,8 +434,10 @@ internal sealed class S7SimServer : IAsyncDisposable
                 if (write.Bit is { } bitAddress)
                 {
                     var mask = (byte)(1 << (bitAddress & 7));
-                    if (write.BitValue) memory[bitAddress >> 3] |= mask;
-                    else memory[bitAddress >> 3] &= (byte)~mask;
+                    if (write.BitValue)
+                        memory[bitAddress >> 3] |= mask;
+                    else
+                        memory[bitAddress >> 3] &= (byte)~mask;
                 }
                 else if (write.ByteOffset + write.Bytes.Length <= memory.Length)
                 {
@@ -435,12 +454,16 @@ internal sealed class S7SimServer : IAsyncDisposable
     private static async Task<byte[]?> ReadTpktAsync(NetworkStream stream, CancellationToken ct)
     {
         var header = new byte[4];
-        if (!await ReadExactAsync(stream, header, ct).ConfigureAwait(false)) return null;
-        if (header[0] != 0x03) return null;
+        if (!await ReadExactAsync(stream, header, ct).ConfigureAwait(false))
+            return null;
+        if (header[0] != 0x03)
+            return null;
         var length = BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(2, 2));
-        if (length < 7) return null;
+        if (length < 7)
+            return null;
         var body = new byte[length - 4];
-        if (!await ReadExactAsync(stream, body, ct).ConfigureAwait(false)) return null;
+        if (!await ReadExactAsync(stream, body, ct).ConfigureAwait(false))
+            return null;
         var frame = new byte[length];
         header.CopyTo(frame, 0);
         body.CopyTo(frame, 4);
@@ -453,7 +476,8 @@ internal sealed class S7SimServer : IAsyncDisposable
         while (read < buffer.Length)
         {
             var n = await stream.ReadAsync(buffer.AsMemory(read), ct).ConfigureAwait(false);
-            if (n == 0) return false;
+            if (n == 0)
+                return false;
             read += n;
         }
         return true;

@@ -72,34 +72,43 @@ internal sealed class McProtocolSimServer : IAsyncDisposable
 
     public ushort GetWord(int address)
     {
-        lock (_sync) return _words[address];
+        lock (_sync)
+            return _words[address];
     }
 
     public void SetWord(int address, ushort value)
     {
-        lock (_sync) _words[address] = value;
+        lock (_sync)
+            _words[address] = value;
     }
 
     public bool GetBit(int address)
     {
-        lock (_sync) return _bits[address];
+        lock (_sync)
+            return _bits[address];
     }
 
     public void SetBit(int address, bool value)
     {
-        lock (_sync) _bits[address] = value;
+        lock (_sync)
+            _bits[address] = value;
     }
 
     public async ValueTask DisposeAsync()
     {
         await _cts.CancelAsync().ConfigureAwait(false);
         _listener.Stop();
-        try { await _acceptLoop.ConfigureAwait(false); } catch { }
+        try
+        { await _acceptLoop.ConfigureAwait(false); }
+        catch { }
         Task[] pending;
-        lock (_sync) pending = _connections.ToArray();
+        lock (_sync)
+            pending = _connections.ToArray();
         foreach (var task in pending)
         {
-            try { await task.ConfigureAwait(false); } catch { }
+            try
+            { await task.ConfigureAwait(false); }
+            catch { }
         }
         _cts.Dispose();
     }
@@ -118,7 +127,8 @@ internal sealed class McProtocolSimServer : IAsyncDisposable
             catch (ObjectDisposedException) { return; }
 
             var task = HandleClientAsync(client);
-            lock (_sync) _connections.Add(task);
+            lock (_sync)
+                _connections.Add(task);
         }
     }
 
@@ -136,9 +146,11 @@ internal sealed class McProtocolSimServer : IAsyncDisposable
                 while (!_cts.IsCancellationRequested)
                 {
                     var read = await stream.ReadAsync(buffer, _cts.Token).ConfigureAwait(false);
-                    if (read == 0) return;
+                    if (read == 0)
+                        return;
 
-                    for (var i = 0; i < read; i++) pending.Add(buffer[i]);
+                    for (var i = 0; i < read; i++)
+                        pending.Add(buffer[i]);
 
                     while (pending.Count >= 9)
                     {
@@ -148,13 +160,15 @@ internal sealed class McProtocolSimServer : IAsyncDisposable
                             return;
                         }
                         var total = 9 + frameLength;
-                        if (pending.Count < total) break;
+                        if (pending.Count < total)
+                            break;
 
                         var frame = pending.GetRange(0, total).ToArray();
                         pending.RemoveRange(0, total);
 
                         // MC 读请求最短 21 字节（含 12 字节数据部），过短视为非法帧并断开。
-                        if (frame.Length < 21) return;
+                        if (frame.Length < 21)
+                            return;
 
                         var response = Process(frame);
                         await stream.WriteAsync(response, _cts.Token).ConfigureAwait(false);
@@ -170,7 +184,8 @@ internal sealed class McProtocolSimServer : IAsyncDisposable
 
     private byte[] Process(byte[] frame)
     {
-        lock (_sync) _requestFrames.Add(Convert.ToHexString(frame));
+        lock (_sync)
+            _requestFrames.Add(Convert.ToHexString(frame));
 
         var command = (ushort)(frame[11] | (frame[12] << 8));
         var subCommand = (ushort)(frame[13] | (frame[14] << 8));
@@ -180,13 +195,15 @@ internal sealed class McProtocolSimServer : IAsyncDisposable
 
         if (command == CommandBatchRead && (subCommand == SubCommandWord || subCommand == SubCommandBit))
         {
-            lock (_sync) _readRequests++;
+            lock (_sync)
+                _readRequests++;
             return HandleRead(frame, subCommand, head, device, count);
         }
 
         if (command == CommandBatchWrite && (subCommand == SubCommandWord || subCommand == SubCommandBit))
         {
-            lock (_sync) _writeRequests++;
+            lock (_sync)
+                _writeRequests++;
             return HandleWrite(frame, subCommand, head, device, count);
         }
 
@@ -228,7 +245,8 @@ internal sealed class McProtocolSimServer : IAsyncDisposable
             {
                 if (head < 0 || head + count > _bits.Length)
                     return BuildResponse(frame, EndCodeDeviceRangeError, []);
-                for (var i = 0; i < count; i++) bits[i] = _bits[head + i];
+                for (var i = 0; i < count; i++)
+                    bits[i] = _bits[head + i];
             }
             else if (device == DeviceD)
             {
@@ -285,7 +303,8 @@ internal sealed class McProtocolSimServer : IAsyncDisposable
                 if (head < 0 || head + requested > _bits.Length)
                     return BuildResponse(frame, EndCodeDeviceRangeError, []);
                 var values = UnpackBits(frame, 21, requested);
-                for (var i = 0; i < requested; i++) _bits[head + i] = values[i];
+                for (var i = 0; i < requested; i++)
+                    _bits[head + i] = values[i];
             }
             else if (device == DeviceD)
             {
@@ -302,8 +321,10 @@ internal sealed class McProtocolSimServer : IAsyncDisposable
                     var absolute = head + i;
                     var wordIndex = absolute / 16;
                     var bit = absolute % 16;
-                    if (values[i]) _words[wordIndex] |= (ushort)(1 << bit);
-                    else _words[wordIndex] &= (ushort)~(1 << bit);
+                    if (values[i])
+                        _words[wordIndex] |= (ushort)(1 << bit);
+                    else
+                        _words[wordIndex] &= (ushort)~(1 << bit);
                 }
             }
             else
@@ -346,7 +367,8 @@ internal sealed class McProtocolSimServer : IAsyncDisposable
         for (var i = 0; i < count; i++)
         {
             var index = offset + (i / 2);
-            if (index >= frame.Length) return values;
+            if (index >= frame.Length)
+                return values;
             var nibble = i % 2 == 0 ? (frame[index] >> 4) & 0x0F : frame[index] & 0x0F;
             values[i] = nibble != 0;
         }

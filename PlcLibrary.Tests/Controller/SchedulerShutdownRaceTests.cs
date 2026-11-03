@@ -53,8 +53,12 @@ public class SchedulerShutdownRaceTests
         finally
         {
             factory.Release.TrySetResult();
-            try { await scheduler.StopSchedulerAsync().WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
-            try { await host.StopAsync(TimeSpan.FromSeconds(5)); } catch { }
+            try
+            { await scheduler.StopSchedulerAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch { }
+            try
+            { await host.StopAsync(TimeSpan.FromSeconds(5)); }
+            catch { }
         }
     }
 

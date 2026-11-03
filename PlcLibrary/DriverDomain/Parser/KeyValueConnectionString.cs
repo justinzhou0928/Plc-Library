@@ -14,7 +14,8 @@ namespace PlcLibrary.DriverDomain.Parser
         public static IReadOnlyDictionary<string, string> Parse(string connectionString)
         {
             var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (string.IsNullOrEmpty(connectionString)) return dict;
+            if (string.IsNullOrEmpty(connectionString))
+                return dict;
 
             var text = connectionString;
             var i = 0;
@@ -22,7 +23,8 @@ namespace PlcLibrary.DriverDomain.Parser
             {
                 while (i < text.Length && (char.IsWhiteSpace(text[i]) || text[i] == ';'))
                     i++;
-                if (i >= text.Length) break;
+                if (i >= text.Length)
+                    break;
 
                 var keyStart = i;
                 while (i < text.Length && text[i] != ':' && text[i] != ';')
@@ -31,7 +33,8 @@ namespace PlcLibrary.DriverDomain.Parser
                 if (i >= text.Length || text[i] == ';')
                 {
                     // 没有冒号的畸形片段：跳到下一个分号
-                    while (i < text.Length && text[i] != ';') i++;
+                    while (i < text.Length && text[i] != ';')
+                        i++;
                     continue;
                 }
 
@@ -66,13 +69,15 @@ namespace PlcLibrary.DriverDomain.Parser
                     }
 
                     // 跳过引号后的空白/多余字符，直到下一个分隔符。
-                    while (i < text.Length && text[i] != ';') i++;
+                    while (i < text.Length && text[i] != ';')
+                        i++;
                     value = sb.ToString();
                 }
                 else
                 {
                     var valueStart = i;
-                    while (i < text.Length && text[i] != ';') i++;
+                    while (i < text.Length && text[i] != ';')
+                        i++;
                     value = text[valueStart..i].Trim();
                 }
 

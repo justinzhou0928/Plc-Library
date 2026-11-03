@@ -1,4 +1,4 @@
-﻿namespace PlcLibrary.DriverDomain.Enums
+namespace PlcLibrary.DriverDomain.Enums
 {
     public enum QualityCode : byte
     {

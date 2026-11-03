@@ -1,10 +1,3 @@
-using Microsoft.Extensions.Logging;
-using PlcLibrary.DriverDomain;
-using PlcLibrary.DriverDomain.Attributes;
-using PlcLibrary.DriverDomain.Enums;
-using PlcLibrary.DriverDomain.Interfaces;
-using PlcLibrary.DriverDomain.Models;
-using PlcLibrary.General.Configuration;
 using System;
 using System.Collections.Generic;
 using System.IO.BACnet;
@@ -12,6 +5,13 @@ using System.IO.BACnet.Serialize;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using PlcLibrary.DriverDomain;
+using PlcLibrary.DriverDomain.Attributes;
+using PlcLibrary.DriverDomain.Enums;
+using PlcLibrary.DriverDomain.Interfaces;
+using PlcLibrary.DriverDomain.Models;
+using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.Bacnet
 {
@@ -57,7 +57,9 @@ namespace PlcLibrary.Bacnet
                 SetState(null, DriverStatus.Faulted);
                 if (client is not null)
                 {
-                    try { client.Dispose(); } catch { }
+                    try
+                    { client.Dispose(); }
+                    catch { }
                 }
                 BacnetLog.LogConnectionFailed(_logger, ex, _config.Host, _config.Port);
                 throw;
@@ -130,7 +132,8 @@ namespace PlcLibrary.Bacnet
         public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             var (client, deviceAddress) = GetClientAndAddressOrThrow();
-            if (points.Length == 0) return [];
+            if (points.Length == 0)
+                return [];
 
             // 默认填充 Bad：厂商设备可能返回不完整的 RMP-ACK（省略某些对象），
             // 不能把数组默认值（Status=Good）当成有效数据返回。
@@ -172,7 +175,8 @@ namespace PlcLibrary.Bacnet
                         ct).ConfigureAwait(false);
                     foreach (var resp in responses)
                     {
-                        if (!groups.TryGetValue(resp.objectIdentifier, out var indices)) continue;
+                        if (!groups.TryGetValue(resp.objectIdentifier, out var indices))
+                            continue;
 
                         var propVal = resp.values.FirstOrDefault(
                             v => v.property.propertyIdentifier == (uint)BacnetPropertyIds.PROP_PRESENT_VALUE);
@@ -211,7 +215,8 @@ namespace PlcLibrary.Bacnet
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
             var (client, deviceAddress) = GetClientAndAddressOrThrow();
-            if (values.Count == 0) return [];
+            if (values.Count == 0)
+                return [];
 
             var entryList = values.ToList();
             var results = new DriverResult[entryList.Count];
@@ -253,7 +258,8 @@ namespace PlcLibrary.Bacnet
 
         public override async ValueTask DisposeAsync()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
             await base.DisposeAsync().ConfigureAwait(false);
             BacnetLog.LogDisposed(_logger);
         }
@@ -272,7 +278,8 @@ namespace PlcLibrary.Bacnet
         /// </summary>
         private async Task<T> WithTimeoutAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken ct)
         {
-            if (_config.Timeout <= 0) return await action(ct).ConfigureAwait(false);
+            if (_config.Timeout <= 0)
+                return await action(ct).ConfigureAwait(false);
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(_config.Timeout);
@@ -322,15 +329,33 @@ namespace PlcLibrary.Bacnet
 
             switch (parts[0].ToUpperInvariant())
             {
-                case "AI": objType = BacnetObjectTypes.OBJECT_ANALOG_INPUT; break;
-                case "AO": objType = BacnetObjectTypes.OBJECT_ANALOG_OUTPUT; break;
-                case "AV": objType = BacnetObjectTypes.OBJECT_ANALOG_VALUE; break;
-                case "BI": objType = BacnetObjectTypes.OBJECT_BINARY_INPUT; break;
-                case "BO": objType = BacnetObjectTypes.OBJECT_BINARY_OUTPUT; break;
-                case "BV": objType = BacnetObjectTypes.OBJECT_BINARY_VALUE; break;
-                case "MI": objType = BacnetObjectTypes.OBJECT_MULTI_STATE_INPUT; break;
-                case "MO": objType = BacnetObjectTypes.OBJECT_MULTI_STATE_OUTPUT; break;
-                case "MV": objType = BacnetObjectTypes.OBJECT_MULTI_STATE_VALUE; break;
+                case "AI":
+                    objType = BacnetObjectTypes.OBJECT_ANALOG_INPUT;
+                    break;
+                case "AO":
+                    objType = BacnetObjectTypes.OBJECT_ANALOG_OUTPUT;
+                    break;
+                case "AV":
+                    objType = BacnetObjectTypes.OBJECT_ANALOG_VALUE;
+                    break;
+                case "BI":
+                    objType = BacnetObjectTypes.OBJECT_BINARY_INPUT;
+                    break;
+                case "BO":
+                    objType = BacnetObjectTypes.OBJECT_BINARY_OUTPUT;
+                    break;
+                case "BV":
+                    objType = BacnetObjectTypes.OBJECT_BINARY_VALUE;
+                    break;
+                case "MI":
+                    objType = BacnetObjectTypes.OBJECT_MULTI_STATE_INPUT;
+                    break;
+                case "MO":
+                    objType = BacnetObjectTypes.OBJECT_MULTI_STATE_OUTPUT;
+                    break;
+                case "MV":
+                    objType = BacnetObjectTypes.OBJECT_MULTI_STATE_VALUE;
+                    break;
                 default:
                     error = $"Unknown BACnet object type '{parts[0]}'. Supported: AI/AO/AV/BI/BO/BV/MI/MO/MV";
                     return false;

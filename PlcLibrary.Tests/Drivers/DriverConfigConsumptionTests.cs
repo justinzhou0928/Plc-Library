@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Text;
 using PlcLibrary.AllenBradley;
 using PlcLibrary.Bacnet;
 using PlcLibrary.Mitsubishi;
@@ -5,8 +7,6 @@ using PlcLibrary.Modbus;
 using PlcLibrary.Omron;
 using PlcLibrary.OpcUa;
 using PlcLibrary.S7;
-using System.Reflection;
-using System.Text;
 
 namespace PlcLibrary.Tests.Drivers;
 
@@ -45,7 +45,8 @@ public class DriverConfigConsumptionTests
             var source = LoadProjectSources(repoRoot, projectDir);
             foreach (var prop in configType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
-                if (knownUnused.ContainsKey(prop.Name)) continue;
+                if (knownUnused.ContainsKey(prop.Name))
+                    continue;
 
                 if (!ReferenceExists(source, prop.Name))
                     failures.Add($"{configType.Name}.{prop.Name} 未被驱动消费：{projectDir} 中无 config.{prop.Name} / _config.{prop.Name} 引用");

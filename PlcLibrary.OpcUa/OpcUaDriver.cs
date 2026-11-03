@@ -1,3 +1,9 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Opc.Ua;
 using Opc.Ua.Client;
@@ -7,12 +13,6 @@ using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
 using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.General.Configuration;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace PlcLibrary.OpcUa
 {
@@ -125,11 +125,13 @@ namespace PlcLibrary.OpcUa
             {
                 if (keepAliveHandler is not null)
                 {
-                    try { session.KeepAlive -= keepAliveHandler; }
+                    try
+                    { session.KeepAlive -= keepAliveHandler; }
                     catch { }
                 }
 
-                try { await session.CloseAsync(ct).ConfigureAwait(false); }
+                try
+                { await session.CloseAsync(ct).ConfigureAwait(false); }
                 catch { }
                 session.Dispose();
             }
@@ -142,7 +144,8 @@ namespace PlcLibrary.OpcUa
         public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             var session = GetClientOrThrow("OPC UA");
-            if (points.Length == 0) return [];
+            if (points.Length == 0)
+                return [];
 
             var results = new DriverResult[points.Length];
             Dictionary<int, int> validIndices = [];
@@ -195,7 +198,8 @@ namespace PlcLibrary.OpcUa
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
             var session = GetClientOrThrow("OPC UA");
-            if (values.Count == 0) return [];
+            if (values.Count == 0)
+                return [];
 
             var entryList = values.ToList();
             var results = new DriverResult[entryList.Count];
@@ -320,7 +324,8 @@ namespace PlcLibrary.OpcUa
                         var dataTypeIndex = i * 3;
                         var accessIndex = dataTypeIndex + 1;
                         var descriptionIndex = dataTypeIndex + 2;
-                        if (dataTypeIndex >= response.Results.Count) continue;
+                        if (dataTypeIndex >= response.Results.Count)
+                            continue;
 
                         if (response.Results[dataTypeIndex].Value is NodeId dataType)
                             descriptor = descriptor with { DataType = DataTypes.GetBuiltInType(dataType).ToString() };
@@ -411,7 +416,8 @@ namespace PlcLibrary.OpcUa
                 {
                     foreach (var item in notification.MonitoredItems)
                     {
-                        if (!handleToIndex.TryGetValue(item.ClientHandle, out var idx)) continue;
+                        if (!handleToIndex.TryGetValue(item.ClientHandle, out var idx))
+                            continue;
 
                         try
                         {
@@ -442,10 +448,12 @@ namespace PlcLibrary.OpcUa
                 throw;
             }
 
-            lock (StateLock) { _subscriptions = new[] { sub }; }
+            lock (StateLock)
+            { _subscriptions = new[] { sub }; }
             OpcUaLog.LogSubscriptionStarted(_logger, vpCount, _config.PublishingInterval);
 
-            try { await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false); }
+            try
+            { await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { }
         }
 
@@ -475,7 +483,8 @@ namespace PlcLibrary.OpcUa
                         catch { }
                     }
 
-                    try { s.Dispose(); }
+                    try
+                    { s.Dispose(); }
                     catch { }
                 }
             }
@@ -485,7 +494,8 @@ namespace PlcLibrary.OpcUa
 
         public override async ValueTask DisposeAsync()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
             await StopPushingAsync(default).ConfigureAwait(false);
             await base.DisposeAsync().ConfigureAwait(false);
             OpcUaLog.LogDisposed(_logger);
@@ -612,7 +622,8 @@ namespace PlcLibrary.OpcUa
         private static bool TryParseNodeId(string address, out NodeId nodeId)
         {
             nodeId = null!;
-            if (string.IsNullOrWhiteSpace(address)) return false;
+            if (string.IsNullOrWhiteSpace(address))
+                return false;
             try
             {
                 nodeId = NodeId.Parse(address);
