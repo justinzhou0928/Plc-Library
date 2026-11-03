@@ -65,6 +65,7 @@ namespace PlcLibrary.DriverPool.Engine
             activity?.SetTag("device.protocol", device.Protocol);
 
             IProtocolDriver? driver = null;
+            var reconnecting = false;
             var acquireTimeout = device.ConnectionTimeout > TimeSpan.Zero ? device.ConnectionTimeout : options.OperationTimeout;
             var hardTimeout = acquireTimeout + ConnectHardTimeoutGrace;
             var sw = Stopwatch.StartNew();
@@ -86,12 +87,13 @@ namespace PlcLibrary.DriverPool.Engine
 
                 if (driver.DriverStatus is DriverStatus.Disconnected or DriverStatus.Faulted)
                 {
+                    reconnecting = driver.DriverStatus == DriverStatus.Faulted;
                     PoolLog.LogConnectingDriver(logger, device.Id, (byte)driver.DriverStatus);
                     // 连接/重连可能忽略取消令牌（底层同步 socket 调用）；WaitAsync 提供硬上限，
                     // 到时放弃该驱动，避免整个采集循环永远卡在 Connect。
                     await _pipeline.ExecuteAsync(async token =>
                     {
-                        if (driver.DriverStatus == DriverStatus.Faulted)
+                        if (reconnecting)
                         {
                             await driver.TryReconnectAsync(token).ConfigureAwait(false);
                         }
@@ -105,8 +107,19 @@ namespace PlcLibrary.DriverPool.Engine
                 // 连接/重连可能返回 false 或静默失败；不能把未连接的驱动交出去，
                 // 否则每次读写都会在驱动内部抛 InvalidOperationException，池也无法按 Faulted 语义丢弃。
                 if (driver.DriverStatus != DriverStatus.Connected)
+                {
                     throw new InvalidOperationException(
                         $"Driver for device '{device.Id}' is {driver.DriverStatus} after connect/reconnect.");
+                }
+
+                if (reconnecting)
+                {
+                    PlcMetrics.Reconnects.Add(1, new TagList
+                    {
+                        { "device.id", device.Id },
+                        { "device.protocol", device.Protocol },
+                    });
+                }
 
                 // 连接期间池可能已被回收：此时不能把驱动交出去（池即将 Dispose 信号量）
                 if (Volatile.Read(ref _recycling) != 0)
@@ -128,6 +141,14 @@ namespace PlcLibrary.DriverPool.Engine
             }
             catch (Exception ex)
             {
+                if (reconnecting)
+                {
+                    PlcMetrics.ReconnectFailures.Add(1, new TagList
+                    {
+                        { "device.id", device.Id },
+                        { "device.protocol", device.Protocol },
+                    });
+                }
                 if (driver is not null)
                     await TryDisposeAsync(driver).ConfigureAwait(false);
                 TryRelease();

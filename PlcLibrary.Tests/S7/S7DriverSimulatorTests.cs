@@ -49,13 +49,27 @@ public class S7DriverSimulatorTests
         Assert.Equal(5, results.Length);
         Assert.All(results, r => Assert.Equal(QualityCode.Good, r.Status));
         Assert.Equal("DB1.DBW0", results[0].Address);
-        Assert.Equal((ushort)64302, Assert.IsType<ushort>(results[0].Value));
-        // 标量类型按地址推断（README「点位数据类型」章节已说明）：DBD → uint(DWord)。
-        // 因此 DataType="float" 不会生效，REAL 点位需要调用方按位转换 —— 见评估报告的一致性风险。
-        Assert.Equal(3.5f, BitConverter.UInt32BitsToSingle(Assert.IsType<uint>(results[1].Value)));
+        Assert.Equal((short)-1234, Assert.IsType<short>(results[0].Value));
+        Assert.Equal(3.5f, Assert.IsType<float>(results[1].Value));
         Assert.True(Assert.IsType<bool>(results[2].Value));
         Assert.False(Assert.IsType<bool>(results[3].Value));
         Assert.Equal("HELLO", Assert.IsType<string>(results[4].Value));
+
+        await driver.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Read_UnsupportedDataType_ReturnsBadConfigErrorWithoutWireRequest()
+    {
+        await using var sim = new S7SimServer();
+        var device = CreateDevice(sim.Port, Point("bad", "DB1.DBD0", "long"));
+        var driver = new S7Driver(NullLogger<S7Driver>.Instance, device);
+        await driver.ConnectAsync();
+
+        var results = await driver.ReadAsync(device.TagPoints);
+
+        Assert.Equal(QualityCode.BadConfigError, Assert.Single(results).Status);
+        Assert.Equal(0, sim.ReadRequestCount);
 
         await driver.DisposeAsync();
     }

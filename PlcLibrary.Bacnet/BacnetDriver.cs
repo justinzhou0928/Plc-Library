@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using PlcLibrary.DriverDomain;
 using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Enums;
@@ -197,7 +197,9 @@ namespace PlcLibrary.Bacnet
                     .ToList();
                 try
                 {
-                    var responses = await client.ReadPropertyMultipleAsync(deviceAddress, specs, 0, ct).ConfigureAwait(false);
+                    var responses = await WithTimeoutAsync(
+                        token => client.ReadPropertyMultipleAsync(deviceAddress, specs, 0, token),
+                        ct).ConfigureAwait(false);
                     foreach (var resp in responses)
                     {
                         if (!groups.TryGetValue(resp.objectIdentifier, out var indices)) continue;
@@ -259,9 +261,11 @@ namespace PlcLibrary.Bacnet
                     var bacnetValue = new BacnetValue(entryList[i].Value);
                     // 参数顺序：invokeId, priority, arrayIndex, ct。Present_Value 不是数组属性，
                     // arrayIndex 必须用 BACNET_ARRAY_ALL（0xFFFFFFFF），不能把超时值传进来。
-                    await client.WritePropertyAsync(deviceAddress, objId,
-                        BacnetPropertyIds.PROP_PRESENT_VALUE, [bacnetValue], 0, null,
-                        ASN1.BACNET_ARRAY_ALL, ct).ConfigureAwait(false);
+                    await WithTimeoutAsync(
+                        token => client.WritePropertyAsync(deviceAddress, objId,
+                            BacnetPropertyIds.PROP_PRESENT_VALUE, [bacnetValue], 0, null,
+                            ASN1.BACNET_ARRAY_ALL, token),
+                        ct).ConfigureAwait(false);
 
                     results[i] = DriverResult.Good(entryList[i].Key.Address, null);
                 }
@@ -302,6 +306,40 @@ namespace PlcLibrary.Bacnet
                 _status = status;
             }
         }
+
+        /// <summary>
+        /// 给单次 BACnet 读写套上配置的 <c>timeout</c>：BACnet 栈默认超时较长，
+        /// 现场慢设备/不响应时不能拖住整个采集周期。超时转 <see cref="TimeoutException"/>（传输级）。
+        /// </summary>
+        private async Task<T> WithTimeoutAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken ct)
+        {
+            if (_config.Timeout <= 0) return await action(ct).ConfigureAwait(false);
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(_config.Timeout);
+            try
+            {
+                // 底层栈可能不响应取消令牌；WaitAsync 提供硬上限。
+                return await action(timeoutCts.Token)
+                    .WaitAsync(TimeSpan.FromMilliseconds(_config.Timeout) + TimeSpan.FromSeconds(1), ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new TimeoutException($"BACnet operation timed out after {_config.Timeout}ms");
+            }
+            catch (TimeoutException) when (!ct.IsCancellationRequested)
+            {
+                throw new TimeoutException($"BACnet operation timed out after {_config.Timeout}ms");
+            }
+        }
+
+        private async Task WithTimeoutAsync(Func<CancellationToken, Task> action, CancellationToken ct)
+            => await WithTimeoutAsync<bool>(async token =>
+            {
+                await action(token).ConfigureAwait(false);
+                return true;
+            }, ct).ConfigureAwait(false);
 
         /// <summary>通信级故障时置 Faulted，连接池据此丢弃驱动并重建，使断线重连生效。</summary>
         private void MarkFaultedIfTransport(Exception ex)

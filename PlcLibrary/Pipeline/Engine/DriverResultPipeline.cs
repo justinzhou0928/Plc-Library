@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.General;
 using PlcLibrary.Pipeline.Interfaces;
@@ -137,6 +138,14 @@ namespace PlcLibrary.Pipeline.Engine
             activity?.SetTag("status", result.Status.ToString());
 
             PlcMetrics.PipelineDispatched.Add(1, new TagList { { "device.id", result.DeviceId } });
+            if (result.Status != QualityCode.Good)
+            {
+                PlcMetrics.BadPoints.Add(1, new TagList
+                {
+                    { "device.id", result.DeviceId },
+                    { "quality", result.Status.ToString() },
+                });
+            }
             var handlers = _handlers;
             if (handlers.Length == 1)
             {

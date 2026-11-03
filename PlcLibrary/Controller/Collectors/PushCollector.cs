@@ -58,8 +58,11 @@ namespace PlcLibrary.Controller.Collectors
 
         public DateTime LastActivityUtc => new(Volatile.Read(ref _lastActivityTicks), DateTimeKind.Utc);
 
-        // 订阅型设备可能长时间没有值变化，给更宽松的阈值；连接/订阅建立阶段仍由连接超时保护。
+        // 订阅建立后由心跳循环刷新；5 分钟仅用于“心跳循环本身卡死”的兜底。
         public TimeSpan StallTimeout { get; } = TimeSpan.FromMinutes(5);
+
+        /// <summary>订阅存活检查周期；稳定工况下即使没有值变化也会刷新心跳。</summary>
+        internal TimeSpan HealthCheckInterval { get; set; } = TimeSpan.FromSeconds(30);
 
         public async Task ExecuteAsync(CancellationToken ct)
         {
@@ -74,7 +77,7 @@ namespace PlcLibrary.Controller.Collectors
                 }
             }, ct).ConfigureAwait(false);
 
-            await _driver.StartPushingAsync(
+            var pushTask = _driver.StartPushingAsync(
                 _device.TagPoints,
                 async (result, token) =>
                 {
@@ -96,7 +99,47 @@ namespace PlcLibrary.Controller.Collectors
                         ControllerLog.LogCollectionFailed(_logger, ex, _device.Id);
                     }
                 },
-                ct).ConfigureAwait(false);
+                ct);
+
+            using var timer = new PeriodicTimer(HealthCheckInterval);
+            try
+            {
+                while (!pushTask.IsCompleted)
+                {
+                    var tickTask = timer.WaitForNextTickAsync(ct).AsTask();
+                    var completed = await Task.WhenAny(pushTask, tickTask).ConfigureAwait(false);
+                    if (ReferenceEquals(completed, pushTask))
+                    {
+                        await pushTask.ConfigureAwait(false);
+                        return;
+                    }
+
+                    await tickTask.ConfigureAwait(false);
+
+                    // 关键：订阅型设备可能长时间没有值变化，不能把“无数据”等同于“无进展”。
+                    // 只要驱动仍处于 Connected，就刷新心跳；驱动自己通过 KeepAlive 把断链置 Faulted。
+                    Volatile.Write(ref _lastActivityTicks, DateTime.UtcNow.Ticks);
+                    if (_driver.DriverStatus is DriverStatus.Faulted or DriverStatus.Disconnected)
+                    {
+                        throw new InvalidOperationException(
+                            $"Push driver for device '{_device.Id}' is {_driver.DriverStatus}.");
+                    }
+                }
+
+                await pushTask.ConfigureAwait(false);
+            }
+            finally
+            {
+                if (!pushTask.IsCompleted)
+                {
+                    // 采集器因驱动故障/取消提前退出时，观察后台任务异常，避免未观察异常。
+                    _ = pushTask.ContinueWith(
+                        static t => _ = t.Exception,
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                        System.Threading.Tasks.TaskScheduler.Default);
+                }
+            }
         }
 
         public async ValueTask DisposeAsync()

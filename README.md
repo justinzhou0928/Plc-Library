@@ -16,6 +16,7 @@
 | **README.md**（本文） | 使用者 | 安装、配置、驱动能力、API、监控与可观测性 |
 | [DEVELOPMENT.md](./DEVELOPMENT.md) | 贡献者 | 架构、运行时、驱动开发、批量读设计、测试策略、已知限制 |
 | [AGENTS.md](./AGENTS.md) | AI 代理/贡献者 | 强制规则、命令、仓库地图、文档维护约定 |
+| [docs/SCOPE.md](./docs/SCOPE.md) | 选型/架构 | 库职责与 SCADA 职责边界、补齐优先级 |
 | [CHANGELOG.md](./CHANGELOG.md) | 使用者 | 版本历史与不兼容变更 |
 | [docs/ASSESSMENT-2026-11-03.md](./docs/ASSESSMENT-2026-11-03.md) | 评审者 | 2026-11-03 工业级评估（本轮基线） |
 | [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md) | 评审者 | 2026-11-02 历史评估快照（非当前行为依据） |
@@ -195,7 +196,7 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 
 示例：`host:192.168.1.1;port:102;rack:0;slot:1;cpu:S71500`
 
-地址为 S7 标准地址（`DB21.DBX10.2`、`DB1.DBD0`、`M10.0`、`I1.0`、`Q2.0`、`T5`、`C10` 等）。**标量类型由地址推断，`DataType` 不参与**：`DBX`→bool、`DBB`→byte、`DBW`→ushort、`DBD`→uint（`REAL` 也会返回 `uint` 位模式，需要 `float` 时请自行 `BitConverter.UInt32BitsToSingle`）。
+地址为 S7 标准地址（`DB21.DBX10.2`、`DB1.DBD0`、`M10.0`、`I1.0`、`Q2.0`、`T5`、`C10` 等）。**配置 `DataType` 时优先按类型解码**（`DBW`+`short` → `short`、`DBD`+`float` → `float`）；未配置时按地址推断：`DBX`→bool、`DBB`→byte、`DBW`→ushort、`DBD`→uint（`REAL` 未配置类型时仍是 `uint` 位模式）。`long`/`ulong` 等 S7.Net 无对应标量 `VarType` 的类型返回 `BadConfigError`。
 
 S7 STRING 必须带长度：`DB6000.DBB504.100` 读 DB6000 从字节 504 起的 STRING(100)，2 字节头自动解析。配置 `DataType:"string"` 但地址无长度会返回配置错误。
 
@@ -349,7 +350,7 @@ OPC UA 驱动实现 `IPushProtocolDriver`：`ApplyDevicesAsync` 后建立订阅�
 |------|--------|------|
 | host | 127.0.0.1 | 目标设备 IP（可写 `ip:port` 覆盖远端端口） |
 | port | 47808 | BACnet/IP 端口（本地监听；远端直连时也使用） |
-| timeout | 5000 | WhoIs 设备发现等待 (ms)；读/写使用底层默认超时 |
+| timeout | 5000 | WhoIs 发现等待 (ms)；读/写也使用该值作为超时上限 |
 | deviceinstance | 0 | 0 = 直连 host；>0 = WhoIs/IAm 发现该实例 |
 | localendpointip | - | 多网卡时指定绑定 IP |
 
@@ -361,7 +362,7 @@ OPC UA 驱动实现 `IPushProtocolDriver`：`ApplyDevicesAsync` 后建立订阅�
 
 | 驱动 | 是否必需 | 未指定时 | 说明 |
 |------|:--:|------|------|
-| S7 | 否（string 除外） | 地址推断 | 标量由地址推断；STRING 需地址带长度 |
+| S7 | 否（string 除外） | 地址推断 | 配置后覆盖地址推断；`DBW`+`short`、`DBD`+`float` 等生效；STRING 需地址带长度 |
 | Modbus | 否 | 地址前缀 | `0xxxx`=bool、`4xxxx`=ushort；配置后解码多寄存器值 |
 | OPC UA | 否 | 服务端类型 | 值透传 |
 | BACnet | 否 | 服务端类型 | `PROP_PRESENT_VALUE` 原始值 |
@@ -402,7 +403,7 @@ OPC UA 驱动实现 `IPushProtocolDriver`：`ApplyDevicesAsync` 后建立订阅�
 - 连接级断路器默认 5 次、失败率 ≥50%、冷却 30s；状态变更走 `ILogger`
 - 驱动捕获传输级故障时置 `Faulted`，池归还时丢弃并按需重建
 - 推送驱动失败由调度器监督循环按指数退避重建（5s 扫描，最长 60s 退避）
-- **卡死看门狗**：轮询采集超过 `max(4 × 采集周期, 30s)` 无进展、推送采集 5 分钟无数据时，监督循环会停止并按退避重建执行器；健康状态返回 `Faulted`。注意：推送驱动的“无数据”包含“点位长期无变化”，稳定工况可能被误判为卡死（见「已知限制」）
+- **卡死看门狗**：轮询采集超过 `max(4 × 采集周期, 30s)` 无进展、推送采集心跳循环停止时，监督循环会停止并按退避重建执行器；健康状态返回 `Faulted`。推送订阅存活期间即使没有值变化，也会按 30s 周期刷新心跳
 - **IO 硬超时**：Polly 超时之后还有 2s 兜底；底层调用忽略取消令牌时也会返回，驱动被丢弃而不是放回池
 - **管道硬超时**：handler 超时是硬上限，忽略取消也不会卡住分发；写入队列最多等待 `EnqueueTimeout`（默认 5s），消费者不前进时丢弃该点并记录 `plc.pipeline.dropped`。handler 不应在返回 `ValueTask` 之前同步阻塞（否则会占住消费者，需自行改为异步）
 - IO 级只对**抛异常**的读写重试；驱动通常把点位错误转为 `DriverResult.Bad`，不触发重试
@@ -414,7 +415,7 @@ OPC UA 驱动实现 `IPushProtocolDriver`：`ApplyDevicesAsync` 后建立订阅�
 | 驱动 | 说明 |
 |------|------|
 | Modbus | 连续地址合并 + PDU 上限自动切分（组级隔离） |
-| S7 | `ReadMultipleVarsAsync` 批量 + 逐点回退 |
+| S7 | `ReadMultipleVarsAsync` 批量；传输失败整批 Bad，非传输失败逐点回退 |
 | OPC UA | 单请求批量 Read；订阅逐点回调 |
 | Mitsubishi | 同设备/同类型连续地址合并为一次数组读（`Int16Array`/`FloatArray`/…）；字软元件 bool 按字数组 + 取位；位软元件逐点 |
 | Omron | 同存储区连续字合并为一次 `Read`、连续位合并为一次 `ReadBit`（组级隔离） |
@@ -470,6 +471,9 @@ Meter `PlcLibrary`，读/写/获取指标带 `device.id`、`device.protocol`，�
 | `plc.reads.total` | Counter\<long\> | 累计读取点位数 |
 | `plc.read.duration` | Histogram\<double\> | ReadAsync 耗时（含 IO 重试） |
 | `plc.read.errors` | Counter\<long\> | ReadAsync 最终失败次数（仅异常，不含 Bad 结果） |
+| `plc.points.bad` | Counter\<long\> | 分发时质量非 Good 的点位数（标签：`device.id`、`quality`） |
+| `plc.reconnects` | Counter\<long\> | 成功的驱动重连次数（标签：`device.id`、`device.protocol`） |
+| `plc.reconnect.failures` | Counter\<long\> | 失败的驱动重连次数（标签：`device.id`、`device.protocol`） |
 | `plc.write.total` | Counter\<long\> | 写操作数 |
 | `plc.acquire.duration` | Histogram\<double\> | 获取驱动耗时（含连接） |
 | `plc.pipeline.dispatched` | Counter\<long\> | 管道分发点数 |
@@ -489,6 +493,8 @@ Grafana 查询示例：
 rate(plc_reads_total[1m])
 histogram_quantile(0.99, rate(plc_read_duration_seconds_bucket[1m]))
 rate(plc_read_errors_total[1m]) / rate(plc_reads_total[1m])
+rate(plc_points_bad_total[1m])
+rate(plc_reconnects_total[1m])
 rate(plc_pipeline_dropped_total[1m])
 ```
 
@@ -504,6 +510,17 @@ rate(plc_pipeline_dropped_total[1m])
 | `IDriverFactory` | 驱动工厂（通常由 `AddDriver<T>` 生成） |
 | `IDataPipeline` | 数据管道（一般无需直接使用） |
 | `IPlcMonitor` | 实时值缓存与变化订阅（Monitor 包） |
+
+### 结果模型
+
+`DriverResult` 同时携带：
+
+- `Timestamp`：库生成/接收结果的采集时间（UTC）；
+- `SourceTimestamp`：协议返回的设备侧源时间戳（未知为 `null`）；
+- `ServerTimestamp`：协议返回的服务器侧时间戳（未知为 `null`）；
+- `Status` / `ErrorMessage` / `Address` / `Value`。
+
+OPC UA 读和订阅会填充源/服务器时间戳；Modbus/S7/Omron/Mitsubishi/AB/BACnet 等不返回该信息的协议保持 `null`，由上层用 `Timestamp` 作为采集时间。时间戳用于 SCADA 判断数据新鲜度、SOE/历史排序，库只透传，不做业务校时。
 
 ```csharp
 public class MyService(IDeviceAccessor accessor)
@@ -562,11 +579,7 @@ app.MapHealthChecks("/healthz");
 | 限制 | 说明 |
 |---|---|
 | OPC UA 可写节点 | 离线回环使用 SDK 标准节点（读/订阅已覆盖）；自定义 NodeManager 的可写语义需真实服务端确认 |
-| S7 标量 `DataType` | 不参与解码，`DBD` 返回 `uint`（`REAL` 需自行按位转换） |
 | Mitsubishi 批量写 | 底层库只返回整体结果，部分点失败时整批标 `Bad` |
-| BACnet 读/写超时 | `timeout` 仅用于 WhoIs 发现，读写依赖底层默认 |
-| 共享池配置 | 同连接串多设备共享池，池按首个设备的 `ConnectionTimeout` 创建 |
-| 推送看门狗 | OPC UA 点位 5 分钟无变化会被判为“无进展”并重建订阅；稳定工况需评估该抖动 |
 | 串口物理层 | 离线仅覆盖参数映射与失败路径，RTU/ASCII 帧需真机/虚拟串口对 |
 | 厂商语义 | 字节序、位地址等以模拟器 + 规范为准，建议上线前做一次真机联调 |
 

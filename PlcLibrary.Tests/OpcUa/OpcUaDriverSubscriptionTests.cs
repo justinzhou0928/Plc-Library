@@ -73,6 +73,22 @@ public class OpcUaDriverSubscriptionTests
     }
 
     [Fact]
+    public void CreatePushResult_CopiesSourceAndServerTimestamps()
+    {
+        var source = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        var server = new DateTime(2026, 1, 2, 3, 4, 6, DateTimeKind.Utc);
+        var value = new DataValue(42, StatusCodes.Good, source)
+        {
+            ServerTimestamp = server,
+        };
+
+        var result = OpcUaDriver.CreatePushResult("ns=2;s=Tag", value);
+
+        Assert.Equal(source, result.SourceTimestamp);
+        Assert.Equal(server, result.ServerTimestamp);
+    }
+
+    [Fact]
     public void CreateMonitoredItem_WithoutSamplingInterval_UsesPublishingInterval()
     {
         var point = new TagPointConfiguration { TagId = "t1", Address = "ns=2;s=Tag" };

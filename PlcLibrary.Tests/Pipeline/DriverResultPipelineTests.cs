@@ -3,10 +3,13 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Models;
+using PlcLibrary.General;
 using PlcLibrary.Pipeline.Engine;
 using PlcLibrary.Pipeline.Interfaces;
 using PlcLibrary.Pipeline.Models;
+using System.Diagnostics.Metrics;
 
 namespace PlcLibrary.Tests.Pipeline;
 
@@ -133,5 +136,32 @@ public class DriverResultPipelineTests
         release.SetResult();
         pipeline.StopConsuming();
         await consumeTask;
+    }
+
+    [Fact]
+    public async Task Dispatch_BadResult_IncrementsBadPointsCounter()
+    {
+        long badPoints = 0;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (ReferenceEquals(instrument.Meter, PlcMetrics.Meter) && instrument.Name == "plc.points.bad")
+                l.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) =>
+            Interlocked.Add(ref badPoints, measurement));
+        listener.Start();
+
+        var services = new ServiceCollection().BuildServiceProvider();
+        var pipeline = new DriverResultPipeline(services, _logger, _optionsWrapper.Object);
+        var consumeTask = pipeline.ConsumeAsync(CancellationToken.None);
+
+        await pipeline.HandleAsync(
+            DriverResult.Bad("40001", QualityCode.BadCommFailure, "bad") with { DeviceId = "d1" },
+            CancellationToken.None);
+        pipeline.StopConsuming();
+        await consumeTask;
+
+        Assert.True(badPoints >= 1, $"plc.points.bad 未记录 Bad 结果，实际 {badPoints}");
     }
 }

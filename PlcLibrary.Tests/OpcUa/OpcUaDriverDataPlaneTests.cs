@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using PlcLibrary.DriverDomain.Enums;
+using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.OpcUa;
 using PlcLibrary.Tests.Simulators;
@@ -104,6 +105,45 @@ public class OpcUaDriverDataPlaneTests
 
             Assert.Equal(QualityCode.BadCommFailure, Assert.Single(results).Status);
             Assert.False(string.IsNullOrWhiteSpace(results[0].ErrorMessage));
+        }
+        finally
+        {
+            await driver.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task StartPushing_InvalidAddress_EmitsBadConfigError()
+    {
+        await using var server = new OpcUaTestServer();
+        using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await server.StartAsync(lifetime.Token);
+
+        var driver = new OpcUaDriver(NullLogger<OpcUaDriver>.Instance, CreateDevice(server.Port));
+        await driver.ConnectAsync(lifetime.Token);
+
+        var received = new ConcurrentQueue<DriverResult>();
+        using var pushCts = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        var pushTask = driver.StartPushingAsync(
+            [Point("not a node id")],
+            (result, _) =>
+            {
+                received.Enqueue(result);
+                pushCts.Cancel();
+                return ValueTask.CompletedTask;
+            },
+            pushCts.Token);
+
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (received.Count == 0 && DateTime.UtcNow < deadline && !pushTask.IsCompleted)
+                await Task.Delay(20);
+
+            var result = Assert.Single(received);
+            Assert.Equal(QualityCode.BadConfigError, result.Status);
+            Assert.Equal("not a node id", result.Address);
+            try { await pushTask; } catch (OperationCanceledException) { }
         }
         finally
         {

@@ -2,7 +2,7 @@
 
 面向贡献者与维护者：架构、运行时、驱动开发、批量读设计、测试策略与已知限制。
 
-> 使用者文档见 [README.md](./README.md)；AI 代理规则见 [AGENTS.md](./AGENTS.md)；发布与 tag 规范见 [docs/RELEASING.md](./docs/RELEASING.md)；当前评估见 [docs/ASSESSMENT-2026-11-03.md](./docs/ASSESSMENT-2026-11-03.md)，历史快照见 [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md)。
+> 使用者文档见 [README.md](./README.md)；AI 代理规则见 [AGENTS.md](./AGENTS.md)；库与 SCADA 的职责边界见 [docs/SCOPE.md](./docs/SCOPE.md)；发布与 tag 规范见 [docs/RELEASING.md](./docs/RELEASING.md)；当前评估见 [docs/ASSESSMENT-2026-11-03.md](./docs/ASSESSMENT-2026-11-03.md)，历史快照见 [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md)。
 
 ## 架构总览
 
@@ -91,7 +91,7 @@ public override async Task StopAsync(CancellationToken ct)
 
 监督策略：每 `SupervisionInterval`（默认 5s）扫描，`IsRunning=false` 或**心跳超时**的执行器按指数退避（周期 × 2^n，最长 60s）重建采集器与驱动，成功后计数清零。轮询采集器内部吞异常、通常不会退出；推送驱动（OPC UA）连接失败会让循环提前结束。
 
-- **心跳**：`PollingCollector` 每个采集周期结束（成功或失败）刷新；`PushCollector` 每次成功分发刷新。轮询阈值 `max(4 × CollectionInterval, 30s)`，推送阈值 5 分钟；`TaskActuator.IsStalled` 由监督循环检查，健康状态返回 `Faulted`
+- **心跳**：`PollingCollector` 每个采集周期结束（成功或失败）刷新；`PushCollector` 每次成功分发刷新，并由 30s 健康检查循环在无数据变化时继续刷新。轮询阈值 `max(4 × CollectionInterval, 30s)`，推送阈值 5 分钟；`TaskActuator.IsStalled` 由监督循环检查，健康状态返回 `Faulted`。推送驱动状态变为 `Faulted`/`Disconnected` 时采集器主动结束，交由监督循环重建
 - **有界停止**：`TaskActuator.StopAsync` 等待循环退出（默认 10s），超时后强制释放采集器（默认再等 5s）并放弃旧循环；监督/停机不会因一个不响应取消的采集循环永久挂起
 - **监督自愈**：`SuperviseAsync` 对单轮异常记录日志后继续，不会因一次异常退出监督循环
 
@@ -239,15 +239,15 @@ services.AddPlcLibrary().AddDriver<MyDriver>();
 指标清单与 PromQL 示例见 [README](./README.md#可观测性)；埋点原则：
 
 - 只在池/管道边界记录，不在驱动热路径打 Info 日志
-- 指标标签保持低基数（设备/协议），不要放地址/TagId
-- 新增指标同步更新 README 表格
+- 指标标签保持低基数（设备/协议/质量），不要放地址/TagId
+- 新增指标同步更新 README 表格；Bad 点用 `plc.points.bad`（不再只看异常计数），重连用 `plc.reconnects` / `plc.reconnect.failures`
 
 ## 批量读设计
 
 | 驱动 | 批量方式 | 失败策略 |
 |---|---|---|
 | Modbus | 连续地址合并 + PDU 上限切分 | 组失败 → 该组 Bad；传输级置 Faulted |
-| S7 | `ReadMultipleVarsAsync` + 逐点回退 | 批量失败 → 逐点回退 |
+| S7 | `ReadMultipleVarsAsync` + 逐点回退；`DataType` 可覆盖地址推断 | 传输级失败 → 整批 Bad；非传输失败 → 逐点回退 |
 | AllenBradley | `ReadMultipleAsync` 原始字节 + CIP 小端解码 | 批量失败 → 逐点回退；string 逐点 |
 | BACnet | `ReadPropertyMultipleAsync` 按对象分组 | 整批失败 → 全部 Bad；传输级置 Faulted |
 | Mitsubishi | 同设备/同类型连续地址合并为 Snet 数组读；字软元件 bool 按字数组 + 取位；位软元件逐点 | 组失败 → 该组 Bad；传输级置 Faulted |
@@ -302,14 +302,9 @@ OPC UA 测试包 `OPCFoundation.NetStandard.Opc.Ua.Server` 为 **test-only**，�
 
 | 项 | 现状 | 影响 |
 |---|---|---|
-| S7 标量 `DataType` | 不参与解码，`DBD` 返回 `uint` | `REAL` 需自行按位转换 |
 | Mitsubishi 批量写 | 底层只返回整体结果 | 部分点失败时整批 Bad，重试需谨慎（非幂等） |
-| BACnet 读写超时 | `timeout` 仅用于 WhoIs 发现 | 读写依赖底层默认超时 |
-| 共享池配置 | 同连接串多设备共享池，按首个设备 `ConnectionTimeout` 创建 | 第二台设备的设备级超时被忽略 |
 | 连接串未知键 | 绑定器忽略未知键 | 拼写错误静默使用默认值 |
 | IO 级无熔断 | 坏设备每周期仍重试（指数退避） | 影响采集周期 |
-| 推送看门狗 | OPC UA 点位 5 分钟无变化会被判为“无进展” | 稳定工况下可能周期性重建订阅 |
-| OPC UA 推送非法地址 | `StartPushingAsync` 只记录日志，不产生 Bad 结果 | 配置错误不会进入数据流，需查日志 |
 | 连接串值含 `;` | 解析按 `;` 切分 | 密码含分号会截断 |
 | handler 同步阻塞 | `HandleAsync` 在返回 `ValueTask` 之前同步阻塞仍会占住管道消费者；`EnqueueTimeout` 只保护采集侧不挂起 | 这种 handler 应改为异步；否则数据会被丢弃而不是被处理 |
 | 驱动 Dispose/Disconnect 不响应 | 池等待有界（连接 5s、归还后台），超时后放弃等待 | 底层 socket 可能仍由运行库持有，直到其自身超时 |

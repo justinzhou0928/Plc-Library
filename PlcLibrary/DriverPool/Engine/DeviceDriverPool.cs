@@ -276,7 +276,7 @@ namespace PlcLibrary.DriverPool.Engine
         }
 
         private static string PoolKey(DeviceConfiguration device)
-            => $"{device.Protocol}|{device.ConnectionString}";
+            => $"{device.Protocol}|{device.ConnectionTimeout.Ticks}|{device.ConnectionString}";
 
         private DeviceSharedPool GetOrCreatePool(DeviceConfiguration device)
         {

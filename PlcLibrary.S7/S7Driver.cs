@@ -334,7 +334,7 @@ namespace PlcLibrary.S7
 
         /// <summary>
         /// 构造 DataItem：S7 字符串点位 → <see cref="VarType.S7String"/>（读 len+2 字节，s7netplus 自动解析 2 字节头）；
-        /// 其余点位沿用 <see cref="DataItem.FromAddress"/>（按地址推断类型）。
+        /// 配置了 <c>DataType</c> 的标量点位按配置覆盖地址推断；未配置时沿用 <see cref="DataItem.FromAddress"/>。
         /// </summary>
         internal static DataItem CreateDataItem(TagPointConfiguration point)
         {
@@ -350,11 +350,51 @@ namespace PlcLibrary.S7
                 };
             }
 
-            if (DataTypeMapper.Resolve(point.DataType) == typeof(string))
+            if (string.IsNullOrWhiteSpace(point.DataType))
+                return DataItem.FromAddress(point.Address);
+
+            if (!DataTypeMapper.TryResolve(point.DataType, out var dataType))
+                throw new InvalidAddressException(
+                    $"S7 不支持的 DataType '{point.DataType}'（地址 {point.Address}）");
+
+            if (dataType == typeof(string))
                 throw new InvalidAddressException(
                     $"S7 string 地址必须带长度，例如 DB1.DBB100.10（当前: {point.Address}）");
 
-            return DataItem.FromAddress(point.Address);
+            var item = DataItem.FromAddress(point.Address);
+
+            if (item.VarType == VarType.Bit)
+            {
+                if (dataType != typeof(bool))
+                    throw new InvalidAddressException(
+                        $"S7 位地址 '{point.Address}' 只支持 bool DataType");
+                return item;
+            }
+
+            if (dataType == typeof(bool))
+                throw new InvalidAddressException(
+                    $"S7 bool 必须使用位地址（如 DB1.DBX10.2），当前: {point.Address}");
+
+            var varType = ResolveVarType(dataType);
+            if (varType is null)
+                throw new InvalidAddressException(
+                    $"S7 不支持 DataType '{point.DataType}' 的标量读取（地址 {point.Address}）");
+
+            item.VarType = varType.Value;
+            item.Count = 1;
+            return item;
         }
+
+        private static VarType? ResolveVarType(Type type) => Type.GetTypeCode(type) switch
+        {
+            TypeCode.Byte => VarType.Byte,
+            TypeCode.Int16 => VarType.Int,
+            TypeCode.UInt16 => VarType.Word,
+            TypeCode.Int32 => VarType.DInt,
+            TypeCode.UInt32 => VarType.DWord,
+            TypeCode.Single => VarType.Real,
+            TypeCode.Double => VarType.LReal,
+            _ => null,
+        };
     }
 }

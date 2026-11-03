@@ -101,6 +101,9 @@ public sealed class BacnetSimServer : IAsyncDisposable
     /// <summary>最近一次 ReadPropertyMultiple 请求里的 propertyArrayIndex。</summary>
     public uint? LastReadArrayIndex { get; private set; }
 
+    /// <summary>为 true 时不再回包，用于验证驱动的读写超时。</summary>
+    public bool PauseResponses { get; set; }
+
     /// <summary>是否对不存在的对象返回逐对象错误。</summary>
     public bool PerObjectErrors { get; }
 
@@ -168,6 +171,8 @@ public sealed class BacnetSimServer : IAsyncDisposable
     private void HandleReadPropertyMultiple(BacnetClient sender, BacnetAddress adr, byte invokeId,
         IList<BacnetReadAccessSpecification> specs, BacnetMaxSegments maxSegments)
     {
+        if (PauseResponses) return;
+
         var results = new List<BacnetReadAccessResult>();
         lock (_gate)
         {
@@ -218,6 +223,8 @@ public sealed class BacnetSimServer : IAsyncDisposable
     private void HandleReadProperty(BacnetClient sender, BacnetAddress adr, byte invokeId,
         BacnetObjectId objectId, BacnetPropertyReference property, BacnetMaxSegments maxSegments)
     {
+        if (PauseResponses) return;
+
         lock (_gate)
         {
             if (!_objects.TryGetValue((objectId.Type, objectId.Instance), out var obj))
@@ -241,6 +248,8 @@ public sealed class BacnetSimServer : IAsyncDisposable
     private void HandleWriteProperty(BacnetClient sender, BacnetAddress adr, byte invokeId,
         BacnetObjectId objectId, BacnetPropertyValue value, BacnetMaxSegments maxSegments)
     {
+        if (PauseResponses) return;
+
         lock (_gate)
         {
             LastWrite = new SimWriteRequest(objectId.Type, objectId.Instance, value.property.propertyIdentifier,

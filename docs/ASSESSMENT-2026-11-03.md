@@ -1,6 +1,8 @@
 # PlcLibrary 工业级质量评估报告（2026-11-03）
 
 > **评估快照**：本报告记录 2026-11-03 对工作区（基线提交 `c839b2b` + 本轮修复）的评估与实测结果，不是长期行为依据。当前行为以 [README](../README.md) / [DEVELOPMENT](../DEVELOPMENT.md) 为准；历史快照见 [ASSESSMENT-2026-11.md](./ASSESSMENT-2026-11.md)。
+>
+> **v1.3.5 发布后补齐**：时间戳、Bad/重连指标、推送心跳、池键、OPC UA 推送非法地址、S7 `DataType`、BACnet 读写超时已在 `[Unreleased]` 落地，见 [SCOPE](./SCOPE.md) / [CHANGELOG](../CHANGELOG.md)；本报告评分与风险清单不包含这些后续变更。
 
 | 项 | 内容 |
 |---|---|

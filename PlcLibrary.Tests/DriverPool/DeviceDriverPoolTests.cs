@@ -90,6 +90,29 @@ public class DeviceDriverPoolTests
     }
 
     [Fact]
+    public async Task DifferentConnectionTimeout_CreatesNewPool()
+    {
+        var driverCount = 0;
+        _factory.Setup(f => f.CreateAsync(It.IsAny<DeviceConfiguration>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                var d = new Mock<IProtocolDriver>();
+                d.Setup(x => x.DriverStatus).Returns(DriverStatus.Connected);
+                Interlocked.Increment(ref driverCount);
+                return d.Object;
+            });
+
+        var pool = CreatePool();
+        var device2 = _device with { ConnectionTimeout = TimeSpan.FromSeconds(7) };
+
+        await pool.ReadAsync(_device, _device.TagPoints, CancellationToken.None);
+        await pool.ReadAsync(device2, device2.TagPoints, CancellationToken.None);
+
+        // 池键包含 ConnectionTimeout：同连接串但借用超时不同，不能共用按首设备创建的池。
+        Assert.Equal(2, driverCount);
+    }
+
+    [Fact]
     public async Task DifferentConnectionKey_CreatesNewPool()
     {
         var driverCount = 0;

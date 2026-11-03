@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### 新增
+
+- `DriverResult.SourceTimestamp` / `DriverResult.ServerTimestamp`：透传协议返回的设备侧/服务器侧时间戳；OPC UA 读与订阅填充，其他协议保持 `null`，`Timestamp` 仍为库采集时间
+- 指标 `plc.points.bad`（按 `device.id`/`quality`）、`plc.reconnects`、`plc.reconnect.failures`，补齐 Bad 质量与重连可观测性
+
+### 修复
+
+- **推送采集看门狗误判**：`PushCollector` 在订阅存活但值长期不变时不再因“5 分钟无数据”被重建；改为 30s 健康检查刷新心跳，并在驱动 `Faulted`/`Disconnected` 时主动结束、交由监督循环重建
+- **共享池键**：`DeviceDriverPool` 的连接池键纳入 `ConnectionTimeout`，同连接串但借用超时不同的设备不再共用按首设备创建的池
+- **BACnet 读写超时**：`timeout` 不再只用于 WhoIs；ReadPropertyMultiple/WriteProperty 均套时间上限，慢设备/不响应会置 `Faulted` 而不是长时间挂起
+- **OPC UA 推送非法地址**：`StartPushingAsync` 对非法 `NodeId` 产出 `BadConfigError`，不再只写日志后静默丢弃
+
+### 变更（不兼容）
+
+- **S7 标量 `DataType` 生效**：配置 `DBW`+`short`、`DBD`+`float` 等类型时按配置解码，不再按地址推断；未配置时保持原行为。依赖 `DBD` 恒为 `uint` 的调用方需检查点位配置；`long`/`ulong` 等无对应 S7.Net 标量 `VarType` 的类型返回 `BadConfigError`
+
+### 文档
+
+- 新增 [docs/SCOPE.md](docs/SCOPE.md)：库职责与 SCADA 职责边界、本轮落地项与剩余补齐优先级
+- README/DEVELOPMENT 同步时间戳、指标、推送心跳与已知限制
+
 ## [1.3.5] - 2026-11-03
 
 ### 修复

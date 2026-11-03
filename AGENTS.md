@@ -43,6 +43,7 @@ dotnet pack PlcLibrary.slnx -c Release -o ./artifacts/pkg
 | `PlcLibrary.Tests/` | xUnit 测试 + `Simulators/` 离线协议服务端 |
 | `README.md` | 使用者文档（安装/配置/API/行为） |
 | `DEVELOPMENT.md` | 架构、设计决策、驱动开发、测试策略、已知限制 |
+| `docs/SCOPE.md` | 库职责 vs SCADA 职责边界、补齐优先级 |
 | `CHANGELOG.md` | 版本历史（含不兼容变更） |
 | `docs/RELEASING.md` | 发布提交、CHANGELOG、annotated tag 的格式规范 |
 | `docs/ASSESSMENT-2026-11-03.md` | 2026-11-03 评估快照（当前基线） |

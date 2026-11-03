@@ -196,9 +196,10 @@ namespace PlcLibrary.OpcUa
                     {
                         var idx = validIndices[j];
                         var dv = response.Results[j];
-                        results[idx] = StatusCode.IsGood(dv.StatusCode)
+                        var result = StatusCode.IsGood(dv.StatusCode)
                             ? DriverResult.Good(points[idx].Address, dv.GetValue(null))
                             : DriverResult.Bad(points[idx].Address, QualityCode.BadCommFailure, dv.StatusCode.ToString());
+                        results[idx] = WithTimestamps(result, dv);
                     }
                 }
                 catch (OperationCanceledException) { throw; }
@@ -280,13 +281,20 @@ namespace PlcLibrary.OpcUa
             var sub = CreateSubscription(_config);
 
             var validPoints = new (int OriginalIndex, string Address, NodeId NodeId)[points.Length];
+            var invalidResults = new List<DriverResult>();
             var vpCount = 0;
             for (var i = 0; i < points.Length; i++)
             {
                 if (TryParseNodeId(points[i].Address, out var nodeId))
                     validPoints[vpCount++] = (i, points[i].Address, nodeId);
                 else
+                {
                     OpcUaLog.LogInvalidAddress(_logger, points[i].Address);
+                    // 读路径对非法 NodeId 返回 BadConfigError；推送路径也必须让配置错误进入数据流。
+                    // 先缓存，等订阅建立后再回调，避免宿主在回调里取消令牌导致订阅创建被中断。
+                    invalidResults.Add(DriverResult.Bad(
+                        points[i].Address, QualityCode.BadConfigError, "Invalid OPC UA address"));
+                }
             }
 
             var addresses = new string[vpCount];
@@ -306,6 +314,9 @@ namespace PlcLibrary.OpcUa
                 }
 
                 await sub.ApplyChangesAsync(ct).ConfigureAwait(false);
+
+                foreach (var invalid in invalidResults)
+                    await onData(invalid, ct).ConfigureAwait(false);
 
                 var handleToIndex = new Dictionary<uint, int>();
                 var monitoredItems = sub.MonitoredItems.ToArray();
@@ -478,11 +489,22 @@ namespace PlcLibrary.OpcUa
             if (value?.Value is null)
                 return DriverResult.Bad(address, QualityCode.BadCommFailure, "Null value");
 
-            if (!StatusCode.IsGood(value.StatusCode))
-                return DriverResult.Bad(address, QualityCode.BadCommFailure, value.StatusCode.ToString());
+            var result = StatusCode.IsGood(value.StatusCode)
+                ? DriverResult.Good(address, value.Value)
+                : DriverResult.Bad(address, QualityCode.BadCommFailure, value.StatusCode.ToString());
 
-            return DriverResult.Good(address, value.Value);
+            return WithTimestamps(result, value);
         }
+
+        private static DriverResult WithTimestamps(DriverResult result, DataValue value)
+            => result with
+            {
+                SourceTimestamp = NormalizeTimestamp(value.SourceTimestamp),
+                ServerTimestamp = NormalizeTimestamp(value.ServerTimestamp),
+            };
+
+        private static DateTime? NormalizeTimestamp(DateTime value)
+            => value == DateTime.MinValue ? null : value;
 
         /// <summary>OPC UA 的服务级/传输级异常置 Faulted，使池按需重连。</summary>
         private void MarkFaultedIfTransport(Exception ex)

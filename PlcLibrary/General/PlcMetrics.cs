@@ -18,6 +18,15 @@ namespace PlcLibrary.General
         internal static readonly Counter<long> ReadErrors = Meter.CreateCounter<long>(
             "plc.read.errors", "errors", "Total read operation errors");
 
+        internal static readonly Counter<long> BadPoints = Meter.CreateCounter<long>(
+            "plc.points.bad", "points", "Tag points dispatched with non-Good quality");
+
+        internal static readonly Counter<long> Reconnects = Meter.CreateCounter<long>(
+            "plc.reconnects", "ops", "Successful driver reconnects");
+
+        internal static readonly Counter<long> ReconnectFailures = Meter.CreateCounter<long>(
+            "plc.reconnect.failures", "ops", "Failed driver reconnect attempts");
+
         internal static readonly Histogram<double> AcquireDuration = Meter.CreateHistogram<double>(
             "plc.acquire.duration", "s", "Driver acquire duration");
 

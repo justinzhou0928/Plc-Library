@@ -217,6 +217,22 @@ public class BacnetDriverSimulatorTests
     }
 
     [Fact]
+    public async Task ReadAsync_PeerStopsResponding_TimesOutWithBadQualityAndFaults()
+    {
+        await using var sim = new BacnetSimServer();
+        await using var driver = await ConnectDriverAsync(sim);
+        sim.PauseResponses = true;
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var results = await driver.ReadAsync([Point("av1", "AV:1")]);
+        sw.Stop();
+
+        Assert.Equal(QualityCode.BadCommFailure, Assert.Single(results).Status);
+        Assert.Equal(DriverStatus.Faulted, driver.DriverStatus);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"BACnet timeout 未生效: {sw.Elapsed}");
+    }
+
+    [Fact]
     public async Task ConnectAsync_WithDeviceInstance_ResolvesViaWhoIsIam()
     {
         const uint instance = 1234;
