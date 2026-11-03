@@ -57,6 +57,7 @@
 ### 构建
 
 - 核心包新增 `Microsoft.Extensions.Options.DataAnnotations` 依赖，用于启动期 Options 校验；生产包不引入测试专用依赖
+- CI 增加 Windows job 与 `-warnaserror` 构建，覆盖 Linux/Windows 双平台
 
 ### 文档
 

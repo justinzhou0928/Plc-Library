@@ -48,7 +48,7 @@ dotnet pack PlcLibrary.slnx -c Release -o ./artifacts/pkg
 | `docs/RELEASING.md` | 发布提交、CHANGELOG、annotated tag 的格式规范 |
 | `docs/ASSESSMENT-2026-11-03.md` | 2026-11-03 评估快照（当前基线） |
 | `docs/ASSESSMENT-2026-11.md` | 2026-11-02 **历史评估快照**，不是当前行为依据 |
-| `.github/workflows/ci.yml` | CI（Ubuntu，restore/build/test/pack） |
+| `.github/workflows/ci.yml` | CI（Ubuntu + Windows，restore/build/test/pack） |
 
 ## 代码约定
 
