@@ -51,4 +51,44 @@ public class KeyValueConnectionStringTests
         Assert.Equal("192.168.1.1", dict["host"]);
         Assert.Equal("102", dict["port"]);
     }
+
+    [Fact]
+    public void Parse_QuotedValue_PreservesSemicolonsAndSpaces()
+    {
+        var dict = KeyValueConnectionString.Parse("host:10.0.0.1;password:\"  p;ass  \"");
+
+        Assert.Equal("  p;ass  ", dict["password"]);
+    }
+
+    [Fact]
+    public void Parse_SingleQuotedValue_PreservesSemicolon()
+    {
+        var dict = KeyValueConnectionString.Parse("password:'a;b'");
+
+        Assert.Equal("a;b", dict["password"]);
+    }
+
+    [Fact]
+    public void Parse_QuotedValue_DoubledQuoteIsEscaped()
+    {
+        var dict = KeyValueConnectionString.Parse("password:\"a\"\"b\"");
+
+        Assert.Equal("a\"b", dict["password"]);
+    }
+
+    [Fact]
+    public void Parse_UnquotedValue_PreservesColons()
+    {
+        var dict = KeyValueConnectionString.Parse("endpoint:opc.tcp://host:4840");
+
+        Assert.Equal("opc.tcp://host:4840", dict["endpoint"]);
+    }
+
+    [Fact]
+    public void Parse_QuotedValueWithLeadingWhitespaceBeforeQuote()
+    {
+        var dict = KeyValueConnectionString.Parse("password:   \"abc\"");
+
+        Assert.Equal("abc", dict["password"]);
+    }
 }

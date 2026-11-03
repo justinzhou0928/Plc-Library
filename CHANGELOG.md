@@ -15,6 +15,7 @@
 - **共享池键**：`DeviceDriverPool` 的连接池键纳入 `ConnectionTimeout`，同连接串但借用超时不同的设备不再共用按首设备创建的池
 - **BACnet 读写超时**：`timeout` 不再只用于 WhoIs；ReadPropertyMultiple/WriteProperty 均套时间上限，慢设备/不响应会置 `Faulted` 而不是长时间挂起
 - **连接串未知键静默忽略**：`ConnectionStringBinder` 现在校验键名（配置类型公开属性 + 显式别名），拼写错误在构造驱动配置时抛出并列出允许键
+- **连接串值截断/空格丢失**：值支持单/双引号包裹，保留 `;`、冒号和首尾空格；引号内同种引号双写转义；未加引号的值仍 Trim
 - **IO 级无断路器**：`ReadAsync`/`WriteAsync` 增加按设备独立的断路器，坏设备在连续失败后快速失败，不再每周期重试到超时
 - **OPC UA 推送非法地址**：`StartPushingAsync` 对非法 `NodeId` 产出 `BadConfigError`，不再只写日志后静默丢弃
 

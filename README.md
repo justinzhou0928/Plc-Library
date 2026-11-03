@@ -183,6 +183,8 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 
 格式 `key:value;key:value`，大小写不敏感。**未知键会在构造驱动配置时抛 `InvalidOperationException`**，并在错误信息中列出未知键和允许键；不再静默使用默认值。驱动如支持特殊别名（例如 S7 的 `cpu`），会在解析器中显式声明。
 
+值可用单/双引号包裹，以保留 `;`、冒号和首尾空格，例如 `password:"a;b"`；引号内的同种引号用双写转义（`"a""b"` → `a"b`）。未加引号的值会 Trim（保持旧行为）。
+
 #### S7
 
 | 字段 | 默认值 | 说明 |
