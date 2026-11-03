@@ -1,6 +1,7 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Opc.Ua;
 using Opc.Ua.Client;
+using PlcLibrary.DriverDomain;
 using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.DriverDomain.Interfaces;
@@ -28,6 +29,7 @@ namespace PlcLibrary.OpcUa
         private readonly object _stateLock = new();
         private Session? _session;
         private IList<Subscription>? _subscriptions;
+        private KeepAliveEventHandler? _keepAliveHandler;
         private DriverStatus _status = DriverStatus.Disconnected;
         private int _disposed;
 
@@ -47,69 +49,84 @@ namespace PlcLibrary.OpcUa
             await DisconnectAsync(ct).ConfigureAwait(false);
             SetStatus(DriverStatus.Connecting);
 
-            var appConfig = CreateApplicationConfig(_config);
-            await appConfig.ValidateAsync(ApplicationType.Client, ct).ConfigureAwait(false);
-
-            var securityMode = ParseSecurityMode(_config.Security);
-            var useSecurity = securityMode != MessageSecurityMode.None;
-
-            var endpointDesc = await CoreClientUtils.SelectEndpointAsync(
-                appConfig,
-                _config.Endpoint,
-                useSecurity,
-                telemetry: null!,
-                ct).ConfigureAwait(false);
-
-            // 安全模式校验：配置了 Sign/SignAndEncrypt 时，端点实际模式不得低于要求，宁可直接失败也不静默降级
-            if (endpointDesc is null)
-                throw new InvalidOperationException($"OPC UA endpoint '{_config.Endpoint}' could not be resolved.");
-
-            if (endpointDesc.SecurityMode < securityMode)
-                throw new InvalidOperationException(
-                    $"OPC UA endpoint '{_config.Endpoint}' security mode '{endpointDesc.SecurityMode}' " +
-                    $"does not meet the configured requirement '{securityMode}'. " +
-                    $"Set security:None to allow unencrypted connections.");
-
-            var endpointConfiguration = EndpointConfiguration.Create(appConfig);
-            var configuredEndpoint = new ConfiguredEndpoint(null, endpointDesc, endpointConfiguration);
-
-            var userIdentity = CreateUserIdentity();
-            var sessionFactory = new DefaultSessionFactory(telemetry: null!);
-
-            ISession session = await sessionFactory.CreateAsync(
-                appConfig,
-                (ITransportWaitingConnection)null!,
-                configuredEndpoint,
-                true,
-                false,
-                appConfig.ApplicationName!,
-                (uint)_config.SessionTimeout,
-                userIdentity,
-                null,
-                ct).ConfigureAwait(false);
-
-            var typedSession = (Session)session;
-            typedSession.KeepAliveInterval = (int)TimeSpan.FromSeconds(KeepAliveIntervalSeconds).TotalMilliseconds;
-            typedSession.KeepAlive += (_, e) =>
+            try
             {
-                if (ServiceResult.IsBad(e.Status))
-                    SetStatus(DriverStatus.Faulted);
-            };
+                var appConfig = CreateApplicationConfig(_config);
+                await appConfig.ValidateAsync(ApplicationType.Client, ct).ConfigureAwait(false);
 
-            lock (_stateLock)
-            {
-                _session = typedSession;
-                _status = DriverStatus.Connected;
+                var securityMode = ParseSecurityMode(_config.Security);
+                var useSecurity = securityMode != MessageSecurityMode.None;
+
+                var endpointDesc = await CoreClientUtils.SelectEndpointAsync(
+                    appConfig,
+                    _config.Endpoint,
+                    useSecurity,
+                    telemetry: null!,
+                    ct).ConfigureAwait(false);
+
+                // 安全模式校验：配置了 Sign/SignAndEncrypt 时，端点实际模式不得低于要求，宁可直接失败也不静默降级
+                if (endpointDesc is null)
+                    throw new InvalidOperationException($"OPC UA endpoint '{_config.Endpoint}' could not be resolved.");
+
+                if (endpointDesc.SecurityMode < securityMode)
+                    throw new InvalidOperationException(
+                        $"OPC UA endpoint '{_config.Endpoint}' security mode '{endpointDesc.SecurityMode}' " +
+                        $"does not meet the configured requirement '{securityMode}'. " +
+                        $"Set security:None to allow unencrypted connections.");
+
+                var endpointConfiguration = EndpointConfiguration.Create(appConfig);
+                var configuredEndpoint = new ConfiguredEndpoint(null, endpointDesc, endpointConfiguration);
+
+                var userIdentity = CreateUserIdentity();
+                var sessionFactory = new DefaultSessionFactory(telemetry: null!);
+
+                ISession session = await sessionFactory.CreateAsync(
+                    appConfig,
+                    (ITransportWaitingConnection)null!,
+                    configuredEndpoint,
+                    true,
+                    false,
+                    appConfig.ApplicationName!,
+                    (uint)_config.SessionTimeout,
+                    userIdentity,
+                    null,
+                    ct).ConfigureAwait(false);
+
+                var typedSession = (Session)session;
+                typedSession.KeepAliveInterval = (int)TimeSpan.FromSeconds(KeepAliveIntervalSeconds).TotalMilliseconds;
+                var keepAliveHandler = new KeepAliveEventHandler((_, e) =>
+                {
+                    if (ServiceResult.IsBad(e.Status))
+                        SetStatus(DriverStatus.Faulted);
+                });
+                typedSession.KeepAlive += keepAliveHandler;
+
+                lock (_stateLock)
+                {
+                    _session = typedSession;
+                    _keepAliveHandler = keepAliveHandler;
+                    _status = DriverStatus.Connected;
+                }
+                OpcUaLog.LogConnected(_logger, _config.Endpoint);
             }
-            OpcUaLog.LogConnected(_logger, _config.Endpoint);
+            catch
+            {
+                // ConnectAsync 失败必须置 Faulted（与其它驱动/DEVELOPMENT 契约一致），
+                // 否则池/监督循环看到的是长期 Connecting。
+                SetStatus(DriverStatus.Faulted);
+                throw;
+            }
         }
 
         public async Task DisconnectAsync(CancellationToken ct = default)
         {
             Session? session;
+            KeepAliveEventHandler? keepAliveHandler;
             lock (_stateLock)
             {
                 _subscriptions = null;
+                keepAliveHandler = _keepAliveHandler;
+                _keepAliveHandler = null;
                 session = _session;
                 _session = null;
                 _status = DriverStatus.Disconnected;
@@ -117,6 +134,12 @@ namespace PlcLibrary.OpcUa
 
             if (session is not null)
             {
+                if (keepAliveHandler is not null)
+                {
+                    try { session.KeepAlive -= keepAliveHandler; }
+                    catch { }
+                }
+
                 try { await session.CloseAsync(ct).ConfigureAwait(false); }
                 catch { }
                 session.Dispose();
@@ -159,7 +182,7 @@ namespace PlcLibrary.OpcUa
                 }
                 else
                 {
-                    results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadCommFailure, "Invalid OPC UA address");
+                    results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadConfigError, "Invalid OPC UA address");
                     OpcUaLog.LogInvalidAddress(_logger, points[i].Address);
                 }
             }
@@ -181,6 +204,7 @@ namespace PlcLibrary.OpcUa
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
+                    MarkFaultedIfTransport(ex);
                     foreach (var kv in validIndices)
                         results[kv.Value] = DriverResult.Bad(points[kv.Value].Address, QualityCode.BadCommFailure, ex.Message);
                     OpcUaLog.LogReadPointFailed(_logger, ex, "batch");
@@ -216,7 +240,7 @@ namespace PlcLibrary.OpcUa
                 }
                 else
                 {
-                    results[i] = DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadCommFailure, "Invalid OPC UA address");
+                    results[i] = DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadConfigError, "Invalid OPC UA address");
                 }
             }
 
@@ -236,6 +260,7 @@ namespace PlcLibrary.OpcUa
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
+                    MarkFaultedIfTransport(ex);
                     foreach (var kv in validIndices)
                         results[kv.Value] = DriverResult.Bad(entryList[kv.Value].Key.Address, QualityCode.BadCommFailure, ex.Message);
                     OpcUaLog.LogWritePointFailed(_logger, ex, "batch");
@@ -295,9 +320,7 @@ namespace PlcLibrary.OpcUa
 
                         try
                         {
-                            var result = item.Value.Value is not null
-                                ? DriverResult.Good(addresses[idx], item.Value.Value)
-                                : DriverResult.Bad(addresses[idx], QualityCode.BadCommFailure, "Null value");
+                            var result = CreatePushResult(addresses[idx], item.Value);
                             onData(result, ct).AsTask().ContinueWith(t =>
                             {
                                 if (t.IsFaulted && t.Exception is not null)
@@ -334,16 +357,29 @@ namespace PlcLibrary.OpcUa
         public Task StopPushingAsync(CancellationToken ct)
         {
             IList<Subscription>? subs;
+            Session? session;
             lock (_stateLock)
             {
                 subs = _subscriptions;
                 _subscriptions = null;
+                session = _session;
             }
 
             if (subs is not null)
             {
                 foreach (var s in subs)
                 {
+                    if (session is not null)
+                    {
+                        try
+                        {
+#pragma warning disable CS0618
+                            session.RemoveSubscription(s);
+#pragma warning restore CS0618
+                        }
+                        catch { }
+                    }
+
                     try { s.Dispose(); }
                     catch { }
                 }
@@ -431,6 +467,31 @@ namespace PlcLibrary.OpcUa
             if (!string.IsNullOrEmpty(_config.UserName))
                 return new UserIdentity(_config.UserName, Encoding.UTF8.GetBytes(_config.Password ?? ""));
             return new UserIdentity(new AnonymousIdentityToken());
+        }
+
+        /// <summary>
+        /// OPC UA 通知的 DataValue 可能携带 Bad StatusCode（值仍非 null）。订阅路径不能只看 Value，
+        /// 否则传感器故障/通信错误会被当成 Good 数据进入缓存。
+        /// </summary>
+        internal static DriverResult CreatePushResult(string address, DataValue? value)
+        {
+            if (value?.Value is null)
+                return DriverResult.Bad(address, QualityCode.BadCommFailure, "Null value");
+
+            if (!StatusCode.IsGood(value.StatusCode))
+                return DriverResult.Bad(address, QualityCode.BadCommFailure, value.StatusCode.ToString());
+
+            return DriverResult.Good(address, value.Value);
+        }
+
+        /// <summary>OPC UA 的服务级/传输级异常置 Faulted，使池按需重连。</summary>
+        private void MarkFaultedIfTransport(Exception ex)
+        {
+            if (TransportFailureDetector.IsTransportFailure(ex)
+                || ex is ServiceResultException { StatusCode: var statusCode } && StatusCode.IsBad(statusCode))
+            {
+                SetStatus(DriverStatus.Faulted);
+            }
         }
 
         /// <summary>连接串 security 字段 → MessageSecurityMode 映射（大小写不敏感，默认 None）。</summary>

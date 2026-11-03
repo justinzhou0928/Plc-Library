@@ -186,6 +186,46 @@ public class OmronDriverSimulatorTests
     }
 
     [Fact]
+    public async Task Read_NumericPointWithBitSuffix_ReturnsBadConfigErrorWithoutWireRequest()
+    {
+        using var server = new FinsServer();
+        server.Start(0);
+        await using var proxy = new FinsFrameCounterProxy(server.Port);
+
+        var device = CreateDevice(proxy.Port, Point("bad", "D100.5", "short"));
+        var driver = new OmronDriver(NullLogger<OmronDriver>.Instance, device);
+        await driver.ConnectAsync();
+
+        var results = await driver.ReadAsync(device.TagPoints);
+
+        Assert.Equal(QualityCode.BadConfigError, Assert.Single(results).Status);
+        Assert.Contains("bit suffix", results[0].ErrorMessage, StringComparison.Ordinal);
+        Assert.Equal(0, proxy.DataFrameCount);
+
+        await driver.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Read_BoolPointWithBitOffsetAbove15_ReturnsBadConfigErrorWithoutWireRequest()
+    {
+        using var server = new FinsServer();
+        server.Start(0);
+        await using var proxy = new FinsFrameCounterProxy(server.Port);
+
+        var device = CreateDevice(proxy.Port, Point("bad", "D100.16", "bool"));
+        var driver = new OmronDriver(NullLogger<OmronDriver>.Instance, device);
+        await driver.ConnectAsync();
+
+        var results = await driver.ReadAsync(device.TagPoints);
+
+        Assert.Equal(QualityCode.BadConfigError, Assert.Single(results).Status);
+        Assert.Contains("0-15", results[0].ErrorMessage, StringComparison.Ordinal);
+        Assert.Equal(0, proxy.DataFrameCount);
+
+        await driver.DisposeAsync();
+    }
+
+    [Fact]
     public async Task Read_AfterDisconnect_ThrowsInvalidOperation()
     {
         using var server = new FinsServer();

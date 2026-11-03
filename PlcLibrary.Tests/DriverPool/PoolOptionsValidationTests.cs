@@ -1,29 +1,22 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using PlcLibrary.Controller.Interfaces;
+using Microsoft.Extensions.Options;
 using PlcLibrary.DriverPool.Models;
 using PlcLibrary.Extensions;
-using PlcLibrary.General.Configuration;
 using PlcLibrary.Modbus;
+using PlcLibrary.Pipeline.Models;
 
 namespace PlcLibrary.Tests.DriverPool;
 
 /// <summary>
-/// PoolOptions 数据注解允许 MaxRetryAttempts = 0，但 Polly 的重试策略要求 ≥ 1：
-/// 配置层校验通过、运行期才抛异常，属于「配置错误反馈过晚」的风险点。
+/// PoolOptions 数据注解与 Polly 约束必须一致：MaxRetryAttempts 为 0 时
+/// Polly 会在首次下发设备时抛校验异常；现在改为启动期 Options 校验直接失败，
+/// 让配置错误在宿主启动阶段暴露，而不是运行期才崩溃。
 /// </summary>
 public class PoolOptionsValidationTests
 {
-    private static DeviceConfiguration Device() => new()
-    {
-        Id = "modbus-01",
-        Protocol = "Modbus_TCP",
-        ConnectionString = "host:127.0.0.1;port:502",
-        TagPoints = [new TagPointConfiguration { TagId = "t1", Address = "40001" }],
-    };
-
     [Fact]
-    public async Task MaxRetryAttemptsZero_PassesOptionsValidation_ButThrowsOnFirstDeviceApply()
+    public async Task MaxRetryAttemptsZero_FailsOptionsValidationOnStart()
     {
         using var host = new HostBuilder()
             .ConfigureServices(services =>
@@ -34,20 +27,24 @@ public class PoolOptionsValidationTests
             })
             .Build();
 
-        // 启动阶段 ValidateOnStart 通过：Range(0,10) 允许 0
-        await host.StartAsync();
-        try
-        {
-            var scheduler = host.Services.GetRequiredService<IDeviceScheduler>();
+        var error = await Assert.ThrowsAsync<OptionsValidationException>(() => host.StartAsync());
 
-            var error = await Record.ExceptionAsync(() => scheduler.ApplyDevicesAsync([Device()]));
+        Assert.Contains("MaxRetryAttempts", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
 
-            Assert.NotNull(error);
-            Assert.Contains("MaxRetryAttempts", error!.ToString(), StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            try { await host.StopAsync(); } catch (Exception) { }
-        }
+    [Fact]
+    public async Task PipelineCapacityZero_FailsOptionsValidationOnStart()
+    {
+        using var host = new HostBuilder()
+            .ConfigureServices(services =>
+            {
+                services.AddPlcLibrary();
+                services.Configure<PipelineOptions>(o => o.Capacity = 0);
+            })
+            .Build();
+
+        var error = await Assert.ThrowsAsync<OptionsValidationException>(() => host.StartAsync());
+
+        Assert.Contains("Capacity", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 }

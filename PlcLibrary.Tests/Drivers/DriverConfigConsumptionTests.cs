@@ -30,10 +30,7 @@ public class DriverConfigConsumptionTests
             ["DestinyNode"] = "FinsClient 节点号属性只读，无法配置",
             ["IsUdp"] = "FinsClient 仅支持 TCP 传输",
         }),
-        (typeof(AllenBradleyDriverConfig), "PlcLibrary.AllenBradley", new()
-        {
-            ["Timeout"] = "TagClient 无超时 API，由驱动池 OperationTimeout 兜底",
-        }),
+        (typeof(AllenBradleyDriverConfig), "PlcLibrary.AllenBradley", []),
         (typeof(BacnetDriverConfig), "PlcLibrary.Bacnet", []),
     ];
 

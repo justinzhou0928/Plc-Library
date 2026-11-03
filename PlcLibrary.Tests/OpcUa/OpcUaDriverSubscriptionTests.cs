@@ -1,4 +1,5 @@
 using Opc.Ua;
+using PlcLibrary.DriverDomain.Enums;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.OpcUa;
 
@@ -45,6 +46,30 @@ public class OpcUaDriverSubscriptionTests
         Assert.Equal(250, item.SamplingInterval);
         Assert.Equal(3u, item.QueueSize);
         Assert.True(item.DiscardOldest);
+    }
+
+    [Fact]
+    public void CreatePushResult_BadStatusCode_ReturnsBadQuality()
+    {
+        // 订阅通知可能带 Bad StatusCode 但 Value 非 null；不能当成 Good。
+        var value = new DataValue(42, StatusCodes.BadSensorFailure, DateTime.UtcNow);
+
+        var result = OpcUaDriver.CreatePushResult("ns=2;s=Tag", value);
+
+        Assert.Equal(QualityCode.BadCommFailure, result.Status);
+        Assert.Null(result.Value);
+        Assert.Contains("BadSensorFailure", result.ErrorMessage);
+    }
+
+    [Fact]
+    public void CreatePushResult_GoodStatusCode_ReturnsValue()
+    {
+        var value = new DataValue(42, StatusCodes.Good, DateTime.UtcNow);
+
+        var result = OpcUaDriver.CreatePushResult("ns=2;s=Tag", value);
+
+        Assert.Equal(QualityCode.Good, result.Status);
+        Assert.Equal(42, result.Value);
     }
 
     [Fact]

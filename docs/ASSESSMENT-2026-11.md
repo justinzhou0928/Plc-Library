@@ -1,6 +1,6 @@
 # PlcLibrary 工业级质量评估报告
 
-> **历史快照（2026-11-02，基线提交 `c348490`）**：本报告记录当时的评估、修复与验证状态，不是当前行为依据。当前行为以 [README](../README.md) / [DEVELOPMENT](../DEVELOPMENT.md) 为准；未修复项以 DEVELOPMENT「已知限制与技术债」为最新清单。新评估请另建 `docs/ASSESSMENT-YYYY-MM.md`，不要覆盖本文件。
+> **历史快照（2026-11-02，基线提交 `c348490`）**：本报告记录当时的评估、修复与验证状态，不是当前行为依据。当前行为以 [README](../README.md) / [DEVELOPMENT](../DEVELOPMENT.md) 为准；未修复项以 DEVELOPMENT「已知限制与技术债」为最新清单。2026-11-03 的新评估见 [ASSESSMENT-2026-11-03.md](./ASSESSMENT-2026-11-03.md)。
 
 | 项 | 内容 |
 |---|---|

@@ -84,15 +84,21 @@ namespace PlcLibrary.Controller.Engine
 
                 foreach (var (id, device) in desired)
                 {
+                    // 停机可能发生在 Apply 等待驱动创建/连接期间；停止后再启动会留下无人回收的执行器。
+                    if (Volatile.Read(ref _stopping) != 0) return;
                     ct.ThrowIfCancellationRequested();
                     if (!_actuators.TryGetValue(id, out _))
                     {
                         await StartActuatorAsync(device, ct).ConfigureAwait(false);
+                        if (Volatile.Read(ref _stopping) != 0)
+                            await StopActuatorAsync(id).ConfigureAwait(false);
                     }
                     else if (_activeConfigs.TryGetValue(id, out var old) && HasSignificantChange(old, device))
                     {
                         await StopActuatorAsync(id).ConfigureAwait(false);
                         await StartActuatorAsync(device, ct).ConfigureAwait(false);
+                        if (Volatile.Read(ref _stopping) != 0)
+                            await StopActuatorAsync(id).ConfigureAwait(false);
                     }
                 }
             }

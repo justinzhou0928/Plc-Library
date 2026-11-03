@@ -29,7 +29,7 @@ public class PushDeviceFailureTests
                 services.Configure<PoolOptions>(o =>
                 {
                     o.MaxRetryAttempts = 1;
-                    o.RetryDelay = TimeSpan.FromMilliseconds(10);
+                    o.RetryDelay = TimeSpan.FromMilliseconds(100);
                     o.OperationTimeout = TimeSpan.FromSeconds(2);
                 });
                 services.AddDriver<FailingPushDriver>();

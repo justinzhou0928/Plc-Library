@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using PlcLibrary.DriverDomain;
 using PlcLibrary.DriverDomain.Attributes;
 using PlcLibrary.DriverDomain.Enums;
@@ -108,32 +108,50 @@ namespace PlcLibrary.S7
                     batchIndices.Add(i);
                 }
                 catch (OperationCanceledException) { throw; }
-                catch
+                catch (Exception ex)
                 {
+                    // 地址解析失败是配置错误，不应伪装成通信故障，也不应产生线上请求。
                     S7Log.LogAddressParseFailed(logger, points[i].Address);
-                    fallback[i] = true;
+                    results[i] = DriverResult.Bad(points[i].Address, QualityCode.BadConfigError, ex.Message);
                 }
             }
 
             if (batchItems.Count > 0)
             {
+                var batchSucceeded = true;
                 try { await plc.ReadMultipleVarsAsync(batchItems, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
+                    batchSucceeded = false;
                     S7Log.LogBatchReadFallback(logger, ex);
                     MarkFaultedIfTransport(ex);
-                    foreach (var idx in batchIndices)
-                        fallback[idx] = true;
+
+                    if (TransportFailureDetector.IsTransportFailure(ex))
+                    {
+                        // 传输已断：逐点回退只会在坏连接上重复等待 timeout。与写路径一致，
+                        // 整批标 Bad 并交给池丢弃/重连；解析失败的点位已单独标 BadConfigError。
+                        foreach (var idx in batchIndices)
+                            results[idx] = DriverResult.Bad(points[idx].Address,
+                                QualityCode.BadCommFailure, ex.Message);
+                    }
+                    else
+                    {
+                        // 协议/数据级失败：逐点回退以隔离坏点位。
+                        foreach (var idx in batchIndices)
+                            fallback[idx] = true;
+                    }
                 }
 
-                for (var j = 0; j < batchItems.Count; j++)
+                if (batchSucceeded)
                 {
-                    var index = batchIndices[j];
-                    if (fallback[index]) continue;
-                    results[index] = batchItems[j].Value is not null
-                        ? DriverResult.Good(points[index].Address, batchItems[j].Value)
-                        : DriverResult.Bad(points[index].Address, QualityCode.BadCommFailure, "Read returned null");
+                    for (var j = 0; j < batchItems.Count; j++)
+                    {
+                        var index = batchIndices[j];
+                        results[index] = batchItems[j].Value is not null
+                            ? DriverResult.Good(points[index].Address, batchItems[j].Value)
+                            : DriverResult.Bad(points[index].Address, QualityCode.BadCommFailure, "Read returned null");
+                    }
                 }
             }
 

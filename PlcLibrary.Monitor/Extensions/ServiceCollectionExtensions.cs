@@ -13,7 +13,7 @@ namespace PlcLibrary.Monitor.Extensions
         /// <summary>注册 PLC 实时值监控缓存（默认配置）。需先调用 <c>AddPlcLibrary()</c>。</summary>
         public static IServiceCollection AddPlcMonitor(this IServiceCollection services)
         {
-            services.AddOptions<MonitorOptions>().ValidateOnStart();
+            services.AddOptions<MonitorOptions>().ValidateDataAnnotations().ValidateOnStart();
             return services.AddPlcMonitorCore();
         }
 
@@ -22,6 +22,7 @@ namespace PlcLibrary.Monitor.Extensions
         {
             services.AddOptions<MonitorOptions>()
                 .Bind(configuration.GetSection(MonitorOptions.SectionName))
+                .ValidateDataAnnotations()
                 .ValidateOnStart();
             return services.AddPlcMonitorCore();
         }

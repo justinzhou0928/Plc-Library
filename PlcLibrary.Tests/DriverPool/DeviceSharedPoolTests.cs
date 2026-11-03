@@ -61,12 +61,16 @@ public class DeviceSharedPoolTests
     [Fact]
     public async Task Return_DisposesFaultedDriver()
     {
+        var status = DriverStatus.Connected;
         var driver = new Mock<IProtocolDriver>();
-        driver.Setup(d => d.DriverStatus).Returns(DriverStatus.Faulted);
+        driver.Setup(d => d.DriverStatus).Returns(() => status);
         _factory.Setup(f => f.CreateAsync(_device, It.IsAny<CancellationToken>())).ReturnsAsync(driver.Object);
 
         var pool = CreatePool();
         var acquired = await pool.AcquireAsync(CancellationToken.None);
+
+        // 借用后驱动在读取中置 Faulted；归还必须直接释放而不是放回 idle 队列。
+        status = DriverStatus.Faulted;
         pool.Return(acquired);
 
         driver.Verify(d => d.DisposeAsync(), Times.AtLeastOnce);
@@ -89,10 +93,33 @@ public class DeviceSharedPoolTests
     }
 
     [Fact]
-    public async Task AcquireAsync_ConnectsWhenDisconnected()
+    public async Task AcquireAsync_ReconnectReturnsFalse_ThrowsAndDisposesDriver()
     {
         var driver = new Mock<IProtocolDriver>();
-        driver.Setup(d => d.DriverStatus).Returns(DriverStatus.Disconnected);
+        driver.Setup(d => d.DriverStatus).Returns(DriverStatus.Faulted);
+        driver.Setup(d => d.TryReconnectAsync(It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        _factory.Setup(f => f.CreateAsync(_device, It.IsAny<CancellationToken>())).ReturnsAsync(driver.Object);
+
+        var pool = CreatePool();
+
+        // TryReconnectAsync 返回 false（不抛异常）时，池不能把仍为 Faulted 的驱动交给调用方。
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await pool.AcquireAsync(CancellationToken.None));
+        driver.Verify(d => d.DisposeAsync(), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_ConnectsWhenDisconnected()
+    {
+        var status = DriverStatus.Disconnected;
+        var driver = new Mock<IProtocolDriver>();
+        driver.Setup(d => d.DriverStatus).Returns(() => status);
+        driver.Setup(d => d.ConnectAsync(It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                status = DriverStatus.Connected;
+                return Task.CompletedTask;
+            });
         _factory.Setup(f => f.CreateAsync(_device, It.IsAny<CancellationToken>())).ReturnsAsync(driver.Object);
 
         var pool = CreatePool();

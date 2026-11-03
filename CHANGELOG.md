@@ -1,8 +1,40 @@
-﻿# Changelog
+# Changelog
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]
+
+## [1.3.5] - 2026-11-03
+
+### 修复
+
+- **配置校验在启动期生效**：`PoolOptions` / `PipelineOptions` / `MonitorOptions` 的 DataAnnotations 之前只调用了 `ValidateOnStart`、没有 `ValidateDataAnnotations`，非法值（如 `MaxRetryAttempts=0`、`Pipeline.Capacity=0`）会通过启动校验并在运行期才抛异常；现在宿主启动即失败并给出字段名
+- **连接池把未连接驱动交给调用方**：`TryReconnectAsync` 返回 `false` 时驱动仍可能是 `Faulted`/`Disconnected`，`DeviceSharedPool.AcquireAsync` 现在校验最终状态，失败即销毁驱动并抛出，避免每次读写都在驱动内部失败
+- **停机与热更新竞态**：`ApplyDevicesAsync` 在创建推送驱动时若与 `StopSchedulerAsync` 并发，停止后仍可能启动一个无人回收的执行器；现在启动后检查 `_stopping` 并立即停止，新增回归用例
+- **Omron 位后缀静默错值**：数值点位（如 `D100.5` + `short`）之前会忽略 `.5` 并读到整字；bool 位号 >15 也会被底层接受。现在均返回 `BadConfigError` 且不产生线上请求
+- **OPC UA 订阅 Bad 质量被当作 Good**：`DataValue.StatusCode` 为 Bad 但 `Value` 非 null 时，之前会以 `Good` 推送；现在校验 StatusCode，Bad 状态进入数据流为 `BadCommFailure`
+- **OPC UA 连接/读写故障状态**：`ConnectAsync` 失败现在置 `Faulted`；Read/Write 的传输级异常也置 `Faulted`，使池/监督循环能重建；非法 `NodeId` 返回 `BadConfigError`
+- **OPC UA 订阅生命周期**：`StopPushingAsync` 从 Session `RemoveSubscription`，`DisconnectAsync` 解绑 KeepAlive 处理器，避免热更新反复订阅累积
+- **AB 空 CIP 载荷越界**：`TryDecodeCipValue` 在只有 2 字节类型码、无数据时先返回失败，避免 `payload[0]` 越界
+- **S7 批量读失败回退**：传输级批量读失败后不再逐点重读（避免 N×`timeout`），整批标 Bad 并置 `Faulted`；地址解析失败改为本地 `BadConfigError`，不再伪装成通信错误
+- **可观测性补齐**：`DeviceSharedPool.AcquireAsync` 现在发出文档中声明的 `PlcLibrary.Acquire` Activity
+
+### 变更（不兼容）
+
+- 非法 Omron 位后缀（数值点位 `.bit` / bool 位号 >15）、S7 读地址解析失败、OPC UA 非法 `NodeId` 现在返回 `BadConfigError`（原先分别是静默值/`BadCommFailure`/`BadCommFailure`）；依赖原错误码分类的上层需同步调整
+- `PoolOptions.MaxRetryAttempts=0`、`Pipeline.Capacity=0` 等非法 Options 现在在宿主启动时直接失败，不再延迟到首次设备下发或管道初始化
+
+### 测试
+
+- 新增回归：池重连失败、停机/Apply 竞态、Omron 位后缀、OPC UA Bad 状态与非法地址、Options 启动校验；全量测试通过（数量以 `dotnet test` 为准）
+
+### 构建
+
+- 核心包新增 `Microsoft.Extensions.Options.DataAnnotations` 依赖，用于启动期 Options 校验；生产包不引入测试专用依赖
+
+### 文档
+
+- 新增 `docs/ASSESSMENT-2026-11-03.md` 评估报告；README/DEVELOPMENT 更新 Options 校验、`plc.pipeline.dropped` 口径、S7 批量读回退与推送看门狗限制
 
 ## [1.3.4] - 2026-11-02
 

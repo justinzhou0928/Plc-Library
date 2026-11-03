@@ -6,11 +6,11 @@ namespace PlcLibrary.S7
     internal static partial class S7Log
     {
         [LoggerMessage(Level = LogLevel.Warning,
-        Message = "S7 批量写入失败，降级逐个写入")]
+        Message = "S7 批量写入失败")]
         internal static partial void LogBatchWriteFallback(ILogger logger, Exception ex);
 
         [LoggerMessage(Level = LogLevel.Warning,
-        Message = "S7 批量读取失败，降级逐个读取")]
+        Message = "S7 批量读取失败")]
         internal static partial void LogBatchReadFallback(ILogger logger, Exception ex);
 
         [LoggerMessage(Level = LogLevel.Warning,

@@ -20,8 +20,8 @@ namespace PlcLibrary.Extensions
     {
         public static IServiceCollection AddPlcLibrary(this IServiceCollection services)
         {
-            services.AddOptions<PoolOptions>().ValidateOnStart();
-            services.AddOptions<PipelineOptions>().ValidateOnStart();
+            services.AddOptions<PoolOptions>().ValidateDataAnnotations().ValidateOnStart();
+            services.AddOptions<PipelineOptions>().ValidateDataAnnotations().ValidateOnStart();
             return services.AddPlcLibraryCore();
         }
 
@@ -29,9 +29,11 @@ namespace PlcLibrary.Extensions
         {
             services.AddOptions<PoolOptions>()
                 .Bind(configuration.GetSection(PoolOptions.SectionName))
+                .ValidateDataAnnotations()
                 .ValidateOnStart();
             services.AddOptions<PipelineOptions>()
                 .Bind(configuration.GetSection(PipelineOptions.SectionName))
+                .ValidateDataAnnotations()
                 .ValidateOnStart();
             return services.AddPlcLibraryCore();
         }

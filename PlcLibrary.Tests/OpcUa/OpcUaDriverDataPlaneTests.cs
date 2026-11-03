@@ -64,6 +64,28 @@ public class OpcUaDriverDataPlaneTests
     }
 
     [Fact]
+    public async Task Read_InvalidNodeIdFormat_ReturnsBadConfigError()
+    {
+        await using var server = new OpcUaTestServer();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await server.StartAsync(cts.Token);
+
+        var driver = new OpcUaDriver(NullLogger<OpcUaDriver>.Instance, CreateDevice(server.Port));
+        await driver.ConnectAsync(cts.Token);
+
+        try
+        {
+            var results = await driver.ReadAsync([Point("not a node id")], cts.Token);
+
+            Assert.Equal(QualityCode.BadConfigError, Assert.Single(results).Status);
+        }
+        finally
+        {
+            await driver.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task Write_ReadOnlyStandardNode_ReturnsBadQuality()
     {
         await using var server = new OpcUaTestServer();

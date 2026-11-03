@@ -10,7 +10,7 @@ namespace PlcLibrary.DriverPool.Models
         [Range(1, 100)]
         public int MaxConnectionsPerDevice { get; set; } = 2;
 
-        [Range(0, 10)]
+        [Range(1, 10)]
         public int MaxRetryAttempts { get; set; } = 3;
 
         [Range(typeof(TimeSpan), "00:00:00.100", "00:01:00")]

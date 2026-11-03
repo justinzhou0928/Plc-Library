@@ -158,9 +158,11 @@ public class S7DriverSimulatorTests
         var results = await driver.ReadAsync(device.TagPoints);
 
         Assert.Equal(2, results.Length);
-        Assert.Equal(QualityCode.BadCommFailure, results[0].Status);
+        Assert.Equal(QualityCode.BadConfigError, results[0].Status);
         Assert.Equal(QualityCode.Good, results[1].Status);
         Assert.Equal((ushort)321, Assert.IsType<ushort>(results[1].Value));
+        // 非法地址在本地拒绝，只有合法点位进入批量请求。
+        Assert.Equal(1, sim.ReadRequestCount);
 
         await driver.DisposeAsync();
     }

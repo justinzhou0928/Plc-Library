@@ -1,4 +1,4 @@
-﻿# PlcLibrary
+# PlcLibrary
 
 工业 PLC 数据采集库：连接池、热更新调度、数据管道、实时值监控与可观测性，一个宿主进程接入多种协议。
 
@@ -17,7 +17,8 @@
 | [DEVELOPMENT.md](./DEVELOPMENT.md) | 贡献者 | 架构、运行时、驱动开发、批量读设计、测试策略、已知限制 |
 | [AGENTS.md](./AGENTS.md) | AI 代理/贡献者 | 强制规则、命令、仓库地图、文档维护约定 |
 | [CHANGELOG.md](./CHANGELOG.md) | 使用者 | 版本历史与不兼容变更 |
-| [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md) | 评审者 | 2026-11 工业级评估快照（含验证矩阵与未修复项） |
+| [docs/ASSESSMENT-2026-11-03.md](./docs/ASSESSMENT-2026-11-03.md) | 评审者 | 2026-11-03 工业级评估（本轮基线） |
+| [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md) | 评审者 | 2026-11-02 历史评估快照（非当前行为依据） |
 
 > 行为与配置以 README/DEVELOPMENT 为准；评估报告是**带日期的快照**，其中的"待处理"项可能已经变化。
 
@@ -38,7 +39,7 @@
 
 > `DeviceConfiguration.Protocol` 必须与驱动上的 `[ProtocolDriverName]` **完全一致（区分大小写）**。写成 `"OPC UA"`/`"OpcUa"` 不会抛异常，该设备会被跳过并记录 `LogProtocolUnregistered`。
 >
-> 各驱动的离线验证等级与未覆盖项见 [评估报告](./docs/ASSESSMENT-2026-11.md#4-驱动完整性验证矩阵)。
+> 各驱动的离线验证等级与未覆盖项见 [评估报告](./docs/ASSESSMENT-2026-11-03.md#4-驱动完整性验证矩阵)。
 
 ## 安装
 
@@ -401,12 +402,12 @@ OPC UA 驱动实现 `IPushProtocolDriver`：`ApplyDevicesAsync` 后建立订阅�
 - 连接级断路器默认 5 次、失败率 ≥50%、冷却 30s；状态变更走 `ILogger`
 - 驱动捕获传输级故障时置 `Faulted`，池归还时丢弃并按需重建
 - 推送驱动失败由调度器监督循环按指数退避重建（5s 扫描，最长 60s 退避）
-- **卡死看门狗**：轮询采集超过 `max(4 × 采集周期, 30s)` 无进展、推送采集 5 分钟无数据时，监督循环会停止并按退避重建执行器；健康状态返回 `Faulted`
+- **卡死看门狗**：轮询采集超过 `max(4 × 采集周期, 30s)` 无进展、推送采集 5 分钟无数据时，监督循环会停止并按退避重建执行器；健康状态返回 `Faulted`。注意：推送驱动的“无数据”包含“点位长期无变化”，稳定工况可能被误判为卡死（见「已知限制」）
 - **IO 硬超时**：Polly 超时之后还有 2s 兜底；底层调用忽略取消令牌时也会返回，驱动被丢弃而不是放回池
 - **管道硬超时**：handler 超时是硬上限，忽略取消也不会卡住分发；写入队列最多等待 `EnqueueTimeout`（默认 5s），消费者不前进时丢弃该点并记录 `plc.pipeline.dropped`。handler 不应在返回 `ValueTask` 之前同步阻塞（否则会占住消费者，需自行改为异步）
 - IO 级只对**抛异常**的读写重试；驱动通常把点位错误转为 `DriverResult.Bad`，不触发重试
 - `PoolIdleTimeout`：空置池超过该时长且无在途借用时销毁；`00:00:00` 禁用
-- `MaxRetryAttempts` 必须 ≥ 1（配置 0 能通过 Options 校验，但首次下发设备会抛 Polly 校验异常，见 DEVELOPMENT「已知限制」）
+- `MaxRetryAttempts` 必须 ≥ 1；`PoolOptions` / `PipelineOptions` / `MonitorOptions` 的 DataAnnotations 在宿主启动时校验，非法值直接阻止启动（不再等到首次下发设备才抛 Polly 异常）
 
 ## 批量读能力
 
@@ -472,7 +473,7 @@ Meter `PlcLibrary`，读/写/获取指标带 `device.id`、`device.protocol`，�
 | `plc.write.total` | Counter\<long\> | 写操作数 |
 | `plc.acquire.duration` | Histogram\<double\> | 获取驱动耗时（含连接） |
 | `plc.pipeline.dispatched` | Counter\<long\> | 管道分发点数 |
-| `plc.pipeline.dropped` | Counter\<long\> | 管道/订阅丢弃点数（含写入超时） |
+| `plc.pipeline.dropped` | Counter\<long\> | 管道写入队列超时丢弃点数（订阅通道 `DropOldest` 不做逐点计数） |
 
 `ActivitySource("PlcLibrary")` 的 Span：`PlcLibrary.ReadAsync`、`PlcLibrary.WriteAsync`、`PlcLibrary.Acquire`、`PlcLibrary.Dispatch`（标签见 DEVELOPMENT）。
 
@@ -565,10 +566,11 @@ app.MapHealthChecks("/healthz");
 | Mitsubishi 批量写 | 底层库只返回整体结果，部分点失败时整批标 `Bad` |
 | BACnet 读/写超时 | `timeout` 仅用于 WhoIs 发现，读写依赖底层默认 |
 | 共享池配置 | 同连接串多设备共享池，池按首个设备的 `ConnectionTimeout` 创建 |
+| 推送看门狗 | OPC UA 点位 5 分钟无变化会被判为“无进展”并重建订阅；稳定工况需评估该抖动 |
 | 串口物理层 | 离线仅覆盖参数映射与失败路径，RTU/ASCII 帧需真机/虚拟串口对 |
 | 厂商语义 | 字节序、位地址等以模拟器 + 规范为准，建议上线前做一次真机联调 |
 
-未修复项、优先级与验证矩阵见 [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md)；工程决策与测试策略见 [DEVELOPMENT.md](./DEVELOPMENT.md)。
+未修复项、优先级与验证矩阵见 [docs/ASSESSMENT-2026-11-03.md](./docs/ASSESSMENT-2026-11-03.md)；工程决策与测试策略见 [DEVELOPMENT.md](./DEVELOPMENT.md)。
 
 ## 致谢
 

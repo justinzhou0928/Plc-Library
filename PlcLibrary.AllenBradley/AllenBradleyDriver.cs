@@ -274,6 +274,7 @@ namespace PlcLibrary.AllenBradley
             if (actualTypeCode != expectedTypeCode) return false;
 
             var payload = data.AsSpan(typeCodeLength);
+            if (payload.Length == 0) return false;
             switch (Type.GetTypeCode(type))
             {
                 case TypeCode.Boolean: value = payload[0] != 0; return true;

@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using NewLife.Omron.Protocols;
 using PlcLibrary.DriverDomain;
 using PlcLibrary.DriverDomain.Attributes;
@@ -177,6 +177,22 @@ namespace PlcLibrary.Omron
                 {
                     results[i] = DriverResult.Bad(point.Address, QualityCode.BadConfigError,
                         $"Omron: invalid address '{point.Address}': {ex.Message}");
+                    continue;
+                }
+
+                if (address.BitOffset > 15)
+                {
+                    results[i] = DriverResult.Bad(point.Address, QualityCode.BadConfigError,
+                        $"Omron: bit offset in '{point.Address}' must be 0-15");
+                    continue;
+                }
+
+                // 位后缀只对 bool 有意义；数值点位带 .bit 会被底层忽略并读到整字，
+                // 属于静默错值，必须在本地拒绝。
+                if (resolved != typeof(bool) && address.IsBit)
+                {
+                    results[i] = DriverResult.Bad(point.Address, QualityCode.BadConfigError,
+                        $"Omron: bit suffix is only supported for bool points ('{point.Address}')");
                     continue;
                 }
 

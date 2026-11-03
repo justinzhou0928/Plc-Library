@@ -60,6 +60,10 @@ namespace PlcLibrary.DriverPool.Engine
 
         public async ValueTask<IProtocolDriver> AcquireAsync(CancellationToken ct)
         {
+            using var activity = PlcActivity.Source.StartActivity("PlcLibrary.Acquire");
+            activity?.SetTag("device.id", device.Id);
+            activity?.SetTag("device.protocol", device.Protocol);
+
             IProtocolDriver? driver = null;
             var acquireTimeout = device.ConnectionTimeout > TimeSpan.Zero ? device.ConnectionTimeout : options.OperationTimeout;
             var hardTimeout = acquireTimeout + ConnectHardTimeoutGrace;
@@ -97,6 +101,12 @@ namespace PlcLibrary.DriverPool.Engine
                         }
                     }, ct).AsTask().WaitAsync(hardTimeout, ct).ConfigureAwait(false);
                 }
+
+                // 连接/重连可能返回 false 或静默失败；不能把未连接的驱动交出去，
+                // 否则每次读写都会在驱动内部抛 InvalidOperationException，池也无法按 Faulted 语义丢弃。
+                if (driver.DriverStatus != DriverStatus.Connected)
+                    throw new InvalidOperationException(
+                        $"Driver for device '{device.Id}' is {driver.DriverStatus} after connect/reconnect.");
 
                 // 连接期间池可能已被回收：此时不能把驱动交出去（池即将 Dispose 信号量）
                 if (Volatile.Read(ref _recycling) != 0)

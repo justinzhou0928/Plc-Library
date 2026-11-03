@@ -2,7 +2,7 @@
 
 面向贡献者与维护者：架构、运行时、驱动开发、批量读设计、测试策略与已知限制。
 
-> 使用者文档见 [README.md](./README.md)；AI 代理规则见 [AGENTS.md](./AGENTS.md)；发布与 tag 规范见 [docs/RELEASING.md](./docs/RELEASING.md)；历史评估快照见 [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md)。
+> 使用者文档见 [README.md](./README.md)；AI 代理规则见 [AGENTS.md](./AGENTS.md)；发布与 tag 规范见 [docs/RELEASING.md](./docs/RELEASING.md)；当前评估见 [docs/ASSESSMENT-2026-11-03.md](./docs/ASSESSMENT-2026-11-03.md)，历史快照见 [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md)。
 
 ## 架构总览
 
@@ -146,7 +146,7 @@ flowchart TD
 - `HandleAsync`：先尝试写入有界队列；超过 `EnqueueTimeout`（默认 5s）仍无空间则丢弃该点并计入 `plc.pipeline.dropped`，避免采集循环被反压永久卡住
 - `ConsumeAsync`：`ReadAllAsync` 串行消费，逐条 `DispatchAsync`
 - 分发：单 handler 直接调用（快路径）；多 handler 按 `MaxHandlerParallelism` 并行；每个 handler 的 `HandlerTimeout` 是**硬上限**（`WaitAsync`），即使忽略取消令牌也不会卡住分发；超时/异常只记录不干扰其它 handler
-- 订阅：`IDataPipeline.ReadAsync` 为每个订阅者建容量 1000 的通道，满时 `DropOldest` 并计数/记录
+- 订阅：`IDataPipeline.ReadAsync` 为每个订阅者建容量 1000 的通道，满时 `DropOldest`（不逐点计数；`plc.pipeline.dropped` 只统计写入队列超时）
 - 停机：`StopConsuming` 完成 Writer，`DisposeResources` 完成所有订阅通道
 
 ## 编写自定义驱动
@@ -298,18 +298,18 @@ OPC UA 测试包 `OPCFoundation.NetStandard.Opc.Ua.Server` 为 **test-only**，�
 
 ## 已知限制与技术债
 
-> 详细证据、严重度与复现见 [评估报告 §5](./docs/ASSESSMENT-2026-11.md#5-缺陷与风险清单)；以下为当前仍需注意的行为。
+> 详细证据、严重度与复现见 [评估报告 §5](./docs/ASSESSMENT-2026-11-03.md#5-缺陷与风险清单)；以下为当前仍需注意的行为。
 
 | 项 | 现状 | 影响 |
 |---|---|---|
-| `PoolOptions.MaxRetryAttempts=0` | 通过 Options 校验，但首次下发设备时 Polly 抛校验异常 | 配置应始终 ≥ 1 |
 | S7 标量 `DataType` | 不参与解码，`DBD` 返回 `uint` | `REAL` 需自行按位转换 |
 | Mitsubishi 批量写 | 底层只返回整体结果 | 部分点失败时整批 Bad，重试需谨慎（非幂等） |
 | BACnet 读写超时 | `timeout` 仅用于 WhoIs 发现 | 读写依赖底层默认超时 |
 | 共享池配置 | 同连接串多设备共享池，按首个设备 `ConnectionTimeout` 创建 | 第二台设备的设备级超时被忽略 |
 | 连接串未知键 | 绑定器忽略未知键 | 拼写错误静默使用默认值 |
 | IO 级无熔断 | 坏设备每周期仍重试（指数退避） | 影响采集周期 |
-| OPC UA 订阅生命周期 | 停止时 Dispose 订阅，但未从 Session `RemoveSubscription`、KeepAlive 未解绑 | 热更新频繁切换可能累积 |
+| 推送看门狗 | OPC UA 点位 5 分钟无变化会被判为“无进展” | 稳定工况下可能周期性重建订阅 |
+| OPC UA 推送非法地址 | `StartPushingAsync` 只记录日志，不产生 Bad 结果 | 配置错误不会进入数据流，需查日志 |
 | 连接串值含 `;` | 解析按 `;` 切分 | 密码含分号会截断 |
 | handler 同步阻塞 | `HandleAsync` 在返回 `ValueTask` 之前同步阻塞仍会占住管道消费者；`EnqueueTimeout` 只保护采集侧不挂起 | 这种 handler 应改为异步；否则数据会被丢弃而不是被处理 |
 | 驱动 Dispose/Disconnect 不响应 | 池等待有界（连接 5s、归还后台），超时后放弃等待 | 底层 socket 可能仍由运行库持有，直到其自身超时 |

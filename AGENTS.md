@@ -45,7 +45,8 @@ dotnet pack PlcLibrary.slnx -c Release -o ./artifacts/pkg
 | `DEVELOPMENT.md` | 架构、设计决策、驱动开发、测试策略、已知限制 |
 | `CHANGELOG.md` | 版本历史（含不兼容变更） |
 | `docs/RELEASING.md` | 发布提交、CHANGELOG、annotated tag 的格式规范 |
-| `docs/ASSESSMENT-2026-11.md` | **带日期的评估快照**，不是当前行为依据 |
+| `docs/ASSESSMENT-2026-11-03.md` | 2026-11-03 评估快照（当前基线） |
+| `docs/ASSESSMENT-2026-11.md` | 2026-11-02 **历史评估快照**，不是当前行为依据 |
 | `.github/workflows/ci.yml` | CI（Ubuntu，restore/build/test/pack） |
 
 ## 代码约定
@@ -98,7 +99,8 @@ dotnet pack PlcLibrary.slnx -c Release -o ./artifacts/pkg
 不要在本文件复制限制清单；统一维护在：
 
 - [DEVELOPMENT.md「已知限制与技术债」](./DEVELOPMENT.md#已知限制与技术债)
-- [评估报告 §5](./docs/ASSESSMENT-2026-11.md#5-缺陷与风险清单)（历史证据）
+- [当前评估 §5](./docs/ASSESSMENT-2026-11-03.md#5-缺陷与风险清单)
+- [历史评估 §5](./docs/ASSESSMENT-2026-11.md#5-缺陷与风险清单)（历史证据）
 
 ## 提交前清单
 

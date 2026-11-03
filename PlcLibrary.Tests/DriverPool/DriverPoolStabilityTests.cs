@@ -76,7 +76,6 @@ public class DriverPoolStabilityTests
         var hangingDispose = new TaskCompletionSource<bool>();
         var first = new ScriptedDriver
         {
-            DriverStatus = DriverStatus.Faulted,
             DisposeHandler = () => new ValueTask(hangingDispose.Task)
         };
         var second = new ScriptedDriver();
@@ -84,8 +83,9 @@ public class DriverPoolStabilityTests
         var factory = new TestFactory(() => drivers.Dequeue());
         var pool = CreatePool(factory, operationTimeout: TimeSpan.FromMilliseconds(100));
 
-        // 直接借用/归还是一个 Faulted 驱动；Dispose 永远不完成
+        // 先正常借用，再模拟读取后置 Faulted；直接归还一个 Faulted 驱动。
         var acquired = await pool.AcquireAsync(Device, CancellationToken.None);
+        first.DriverStatus = DriverStatus.Faulted;
         pool.Return(acquired, Device);
 
         // Dispose 卡住不应占着信号量：下一次借用必须很快成功
