@@ -29,7 +29,7 @@ namespace PlcLibrary.DriverPool.Engine
 
         private readonly IReadOnlyDictionary<string, IDriverFactory> _factoriesByProtocol;
         private readonly ConcurrentDictionary<string, Lazy<DeviceSharedPool>> _pools = new();
-        private readonly ConcurrentDictionary<string, ResiliencePipeline> _ioPipelines = new();
+        private readonly ConcurrentDictionary<IoPipelineKey, ResiliencePipeline> _ioPipelines = new();
         private readonly PoolOptions _options;
         private readonly ILoggerFactory _loggerFactory;
         private readonly CancellationTokenSource? _cleanupCts;
@@ -44,7 +44,10 @@ namespace PlcLibrary.DriverPool.Engine
             IEnumerable<IDriverFactory> factories,
             ILoggerFactory loggerFactory)
         {
-            _factoriesByProtocol = factories.ToDictionary(f => f.ProtocolDriverName);
+            // 幂等注册：同一协议重复 AddDriver 时保留最后一个工厂
+            _factoriesByProtocol = factories
+                .GroupBy(f => f.ProtocolDriverName, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Last(), StringComparer.Ordinal);
             _options = options.Value;
             _loggerFactory = loggerFactory;
 
@@ -59,7 +62,7 @@ namespace PlcLibrary.DriverPool.Engine
         public async Task<DriverResult[]> ReadAsync(
             DeviceConfiguration device, TagPointConfiguration[] points, CancellationToken ct = default)
         {
-            using var activity = PlcActivity.Source.StartActivity("PlcLibrary.ReadAsync");
+            using var activity = PlcActivity.Source.StartActivity("PlcLibrary.ReadAsync", ActivityKind.Client);
             activity?.SetTag("device.id", device.Id);
             activity?.SetTag("device.protocol", device.Protocol);
             activity?.SetTag("point.count", points.Length);
@@ -119,7 +122,7 @@ namespace PlcLibrary.DriverPool.Engine
         public async Task<DriverResult[]> WriteAsync(
             DeviceConfiguration device, IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
-            using var activity = PlcActivity.Source.StartActivity("PlcLibrary.WriteAsync");
+            using var activity = PlcActivity.Source.StartActivity("PlcLibrary.WriteAsync", ActivityKind.Client);
             activity?.SetTag("device.id", device.Id);
             activity?.SetTag("device.protocol", device.Protocol);
             activity?.SetTag("point.count", values.Count);
@@ -162,7 +165,7 @@ namespace PlcLibrary.DriverPool.Engine
         public async Task<IReadOnlyList<TagDescriptor>> BrowseAsync(
             DeviceConfiguration device, string? address = null, CancellationToken ct = default)
         {
-            using var activity = PlcActivity.Source.StartActivity("PlcLibrary.BrowseAsync");
+            using var activity = PlcActivity.Source.StartActivity("PlcLibrary.BrowseAsync", ActivityKind.Client);
             activity?.SetTag("device.id", device.Id);
             activity?.SetTag("device.protocol", device.Protocol);
 
@@ -205,7 +208,7 @@ namespace PlcLibrary.DriverPool.Engine
         private TimeSpan HardTimeout => _options.OperationTimeout + HardTimeoutGrace;
 
         private ResiliencePipeline GetIoPipeline(DeviceConfiguration device)
-            => _ioPipelines.GetOrAdd(PoolKey(device), _ => BuildIoPipeline(device));
+            => _ioPipelines.GetOrAdd(new IoPipelineKey(PoolKey(device), device.Id), _ => BuildIoPipeline(device));
 
         private ResiliencePipeline BuildIoPipeline(DeviceConfiguration device)
         {
@@ -295,7 +298,8 @@ namespace PlcLibrary.DriverPool.Engine
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
 
-            _cleanupCts?.Cancel();
+            if (_cleanupCts is not null)
+                await _cleanupCts.CancelAsync().ConfigureAwait(false);
             if (_cleanupTask is not null)
             {
                 try
@@ -351,7 +355,13 @@ namespace PlcLibrary.DriverPool.Engine
 
                 if (_pools.TryRemove(key, out _))
                 {
-                    _ioPipelines.TryRemove(key, out _);
+                    // IO 断路器按设备独立，池回收时清掉挂在该连接池下的所有设备管线
+                    foreach (var ioKey in _ioPipelines.Keys)
+                    {
+                        if (string.Equals(ioKey.PoolKey, key, StringComparison.Ordinal))
+                            _ioPipelines.TryRemove(ioKey, out _);
+                    }
+
                     await pool.DisposeAsync().ConfigureAwait(false);
                     PoolLog.LogPoolRecycled(_loggerFactory.CreateLogger<DeviceDriverPool>(), pool.Device.Id);
                 }
@@ -364,6 +374,9 @@ namespace PlcLibrary.DriverPool.Engine
 
         private static string PoolKey(DeviceConfiguration device)
             => $"{device.Protocol}|{device.ConnectionTimeout.Ticks}|{device.ConnectionString}";
+
+        /// <summary>IO 断路器按逻辑设备隔离：同一连接池下不同 DeviceId 不共享熔断状态。</summary>
+        private readonly record struct IoPipelineKey(string PoolKey, string DeviceId);
 
         private DeviceSharedPool GetOrCreatePool(DeviceConfiguration device)
         {

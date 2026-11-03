@@ -64,6 +64,7 @@ namespace PlcLibrary.Mitsubishi
         /// <inheritdoc/>
         public override async Task ConnectAsync(CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             await DisconnectAsync(ct).ConfigureAwait(false);
             SetState(null, DriverStatus.Connecting);
 
@@ -138,17 +139,27 @@ namespace PlcLibrary.Mitsubishi
             if (points.Length == 0)
                 return [];
 
+            ct.ThrowIfCancellationRequested();
             var results = new DriverResult[points.Length];
             var plans = BuildReadPoints(points, results);
 
             foreach (var group in BuildNumericGroups(plans))
+            {
+                ct.ThrowIfCancellationRequested();
                 await ReadNumericGroupAsync(operate, group, results).ConfigureAwait(false);
+            }
 
             foreach (var group in BuildBoolGroups(plans))
+            {
+                ct.ThrowIfCancellationRequested();
                 await ReadBoolGroupAsync(operate, group, results).ConfigureAwait(false);
+            }
 
             foreach (var plan in plans.Where(p => p.Mode == ReadMode.BitDevice))
+            {
+                ct.ThrowIfCancellationRequested();
                 await ReadBitDeviceAsync(operate, plan, results).ConfigureAwait(false);
+            }
 
             return results;
         }
@@ -161,6 +172,7 @@ namespace PlcLibrary.Mitsubishi
             if (values.Count == 0)
                 return [];
 
+            ct.ThrowIfCancellationRequested();
             var entryList = values.ToList();
             var results = new DriverResult[entryList.Count];
 

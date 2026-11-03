@@ -62,7 +62,7 @@ namespace PlcLibrary.DriverPool.Engine
 
         public async ValueTask<IProtocolDriver> AcquireAsync(CancellationToken ct)
         {
-            using var activity = PlcActivity.Source.StartActivity("PlcLibrary.Acquire");
+            using var activity = PlcActivity.Source.StartActivity("PlcLibrary.Acquire", ActivityKind.Client);
             activity?.SetTag("device.id", device.Id);
             activity?.SetTag("device.protocol", device.Protocol);
 

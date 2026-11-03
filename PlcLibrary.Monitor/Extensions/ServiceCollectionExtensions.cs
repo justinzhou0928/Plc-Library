@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using PlcLibrary.Monitor.Engine;
 using PlcLibrary.Monitor.Interfaces;
@@ -33,9 +34,10 @@ namespace PlcLibrary.Monitor.Extensions
 
         private static IServiceCollection AddPlcMonitorCore(this IServiceCollection services)
         {
-            services.AddSingleton<PlcMonitor>();
-            services.AddSingleton<IPlcMonitor>(sp => sp.GetRequiredService<PlcMonitor>());
-            services.AddSingleton<IDataHandler>(sp => sp.GetRequiredService<PlcMonitor>());
+            // 幂等：重复调用 AddPlcMonitor 不会产生多个缓存实例或多个 IDataHandler
+            services.TryAddSingleton<PlcMonitor>();
+            services.TryAddSingleton<IPlcMonitor>(sp => sp.GetRequiredService<PlcMonitor>());
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<IDataHandler, PlcMonitorHandler>());
             services.AddHostedService<PlcMonitorHost>();
             return services;
         }

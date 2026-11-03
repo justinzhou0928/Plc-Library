@@ -37,6 +37,6 @@ namespace PlcLibrary.General
             "plc.pipeline.dispatched", "points", "Points dispatched via pipeline");
 
         internal static readonly Counter<long> PipelineDropped = Meter.CreateCounter<long>(
-            "plc.pipeline.dropped", "points", "Points dropped due to subscriber backpressure");
+            "plc.pipeline.dropped", "points", "Points dropped when pipeline enqueue times out");
     }
 }

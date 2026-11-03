@@ -7,12 +7,27 @@ using PlcLibrary.Extensions;
 using PlcLibrary.General.Configuration;
 using PlcLibrary.Monitor.Extensions;
 using PlcLibrary.Monitor.Interfaces;
+using PlcLibrary.Pipeline.Interfaces;
 using PlcLibrary.Tests.Integration;
 
 namespace PlcLibrary.Tests.Monitor;
 
 public class MonitorIntegrationTests
 {
+    [Fact]
+    public void AddPlcMonitor_Twice_RegistersSingleHandlerAndMonitor()
+    {
+        var services = new ServiceCollection();
+        services.AddPlcLibrary();
+        services.AddPlcMonitor();
+        services.AddPlcMonitor();
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Single(provider.GetServices<IDataHandler>());
+        Assert.Single(provider.GetServices<IPlcMonitor>());
+    }
+
     private static DeviceConfiguration CreateDevice(string id, string connectionString, params string[] tags) => new()
     {
         Id = id,

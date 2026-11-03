@@ -2,7 +2,9 @@
 
 面向贡献者与维护者：架构、运行时、驱动开发、批量读设计、测试策略与已知限制。
 
-> 使用者文档见 [README.md](./README.md)；AI 代理规则见 [AGENTS.md](./AGENTS.md)；库与 SCADA 的职责边界见 [docs/SCOPE.md](./docs/SCOPE.md)；发布与 tag 规范见 [docs/RELEASING.md](./docs/RELEASING.md)；当前评估见 [docs/ASSESSMENT-2026-11-03.md](./docs/ASSESSMENT-2026-11-03.md)，历史快照见 [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md)。
+> 使用者文档见 [README.md](./README.md)；AI 代理规则见 [AGENTS.md](./AGENTS.md)；库与 SCADA 的职责边界见 [docs/SCOPE.md](./docs/SCOPE.md)；发布与 tag 规范见 [docs/RELEASING.md](./docs/RELEASING.md)；历史评估见 [docs/ASSESSMENT-2026-11-03.md](./docs/ASSESSMENT-2026-11-03.md) 与 [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md)；2.x 变更以 [CHANGELOG.md](./CHANGELOG.md) 为准。
+
+> 目标框架：`net8.0` / `net10.0`。核心包只引用 `Microsoft.Extensions.*` 抽象包（Hosting.Abstractions、Configuration、Options、Logging.Abstractions），不引入完整 Hosting 的日志/JSON 传递依赖。
 
 ## 架构总览
 
@@ -148,8 +150,8 @@ flowchart TD
 - `HandleAsync`：先尝试写入有界队列；超过 `EnqueueTimeout`（默认 5s）仍无空间则丢弃该点并计入 `plc.pipeline.dropped`，避免采集循环被反压永久卡住
 - `ConsumeAsync`：`ReadAllAsync` 串行消费，逐条 `DispatchAsync`
 - 分发：单 handler 直接调用（快路径）；多 handler 按 `MaxHandlerParallelism` 并行；每个 handler 的 `HandlerTimeout` 是**硬上限**（`WaitAsync`），即使忽略取消令牌也不会卡住分发；超时/异常只记录不干扰其它 handler
-- 订阅：`IDataPipeline.ReadAsync`（internal）为每个订阅者建容量 1000 的通道，满时 `DropOldest`（不逐点计数；`plc.pipeline.dropped` 只统计写入队列超时）
-- 停机：`StopConsuming` 完成 Writer，`DisposeResources` 完成所有订阅通道
+- 停机：`StopConsuming` 完成 Writer；`DisposeResources` 完成 Writer。内部不再提供 `IDataPipeline.ReadAsync` 订阅通道，应用通过 `IDataHandler` 或 `IPlcMonitor` 消费
+- `plc.pipeline.dropped` 只统计写入队列超时丢弃；handler 超时/异常只记录日志，不改变该计数口径
 
 ## 编写自定义驱动
 
@@ -169,7 +171,9 @@ public sealed record MyDriverConfig
 }
 ```
 
-> 绑定器默认校验未知键：键名必须是配置类型的公开属性名，或驱动显式声明的别名（如 S7 `cpu`）；拼写错误在构造驱动配置时直接抛出。值支持单/双引号包裹以保留 `;`、冒号和首尾空格；引号内同种引号双写转义。
+> 绑定器默认校验未知键：键名必须是配置类型的公开属性名，或驱动显式声明的别名（如 S7 `cpu`，通过 `[ConfigurationKeyName]` 绑定）；拼写错误在构造驱动配置时直接抛出。值支持单/双引号包裹以保留 `;`、冒号和首尾空格；引号内同种引号双写转义。
+
+> 枚举型配置必须 fail-fast：S7 `cpu`、Modbus `parity`/`stopbits`、OPC UA `security` 的非法字符串在 `Parse` 阶段抛 `InvalidOperationException`；空值仍使用字段默认值。不要用 `Enum.TryParse` 失败后静默保留默认值。
 
 ### 2. 数据类型
 
@@ -264,7 +268,7 @@ services.AddPlcLibrary().AddDriver<MyDriver>();
 | `PlcLibrary.BrowseAsync` | `DeviceDriverPool.BrowseAsync` | device.id/device.protocol |
 | `PlcLibrary.Dispatch` | `DriverResultPipeline.DispatchAsync` | device.id/tag.id/status |
 
-指标清单与 PromQL 示例见 [README](./README.md#可观测性)；埋点原则：
+`ReadAsync`/`WriteAsync`/`Acquire`/`BrowseAsync` 使用 `ActivityKind.Client`，`Dispatch` 使用默认 Internal；指标清单与 PromQL 示例见 [README](./README.md#可观测性)；埋点原则：
 
 - 只在池/管道边界记录，不在驱动热路径打 Info 日志
 - 指标标签保持低基数（设备/协议/质量），不要放地址/TagId

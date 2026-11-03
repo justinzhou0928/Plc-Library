@@ -2,6 +2,7 @@ using System;
 using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using PlcLibrary.Application;
 using PlcLibrary.Controller.Engine;
@@ -48,20 +49,21 @@ namespace PlcLibrary.Extensions
         private static IServiceCollection AddPlcLibraryCore(this IServiceCollection services)
         {
             // 单一实例实现多个接口：池既提供读写，也提供标签浏览。
-            services.AddSingleton<DeviceDriverPool>();
-            services.AddSingleton<IDeviceAccessor>(sp => sp.GetRequiredService<DeviceDriverPool>());
-            services.AddSingleton<IDeviceBrowser>(sp => sp.GetRequiredService<DeviceDriverPool>());
+            // 使用 TryAdd* 保证重复调用 AddPlcLibrary 不会产生多份单例/管道消费者
+            services.TryAddSingleton<DeviceDriverPool>();
+            services.TryAddSingleton<IDeviceAccessor>(sp => sp.GetRequiredService<DeviceDriverPool>());
+            services.TryAddSingleton<IDeviceBrowser>(sp => sp.GetRequiredService<DeviceDriverPool>());
 
-            services.AddSingleton<DriverResultPipeline>();
-            services.AddSingleton<IDataPipeline>(sp => sp.GetRequiredService<DriverResultPipeline>());
+            services.TryAddSingleton<DriverResultPipeline>();
+            services.TryAddSingleton<IDataPipeline>(sp => sp.GetRequiredService<DriverResultPipeline>());
             services.AddHostedService<PipelineHost>();
 
-            services.AddSingleton<TaskScheduler>();
-            services.AddSingleton<IDeviceScheduler>(sp => sp.GetRequiredService<TaskScheduler>());
+            services.TryAddSingleton<TaskScheduler>();
+            services.TryAddSingleton<IDeviceScheduler>(sp => sp.GetRequiredService<TaskScheduler>());
             services.AddHostedService<TaskSchedulerHost>();
 
             // 应用只依赖 IPlcGateway；scheduler/accessor/browser 留在内部。
-            services.AddSingleton<IPlcGateway>(sp => new PlcGateway(
+            services.TryAddSingleton<IPlcGateway>(sp => new PlcGateway(
                 sp.GetRequiredService<IDeviceScheduler>(),
                 sp.GetRequiredService<IDeviceAccessor>(),
                 sp.GetRequiredService<IDeviceBrowser>()));

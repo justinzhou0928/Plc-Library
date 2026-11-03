@@ -145,6 +145,23 @@ public class PlcMonitorTests
     }
 
     [Fact]
+    public async Task SameArrayContent_DoesNotReplaceCachedValue()
+    {
+        var monitor = CreateMonitor();
+        var first = new byte[] { 1, 2, 3 };
+        await FeedAsync(monitor, Good("d1", "t1", "40001", first));
+        var cached = monitor.Get("d1", "t1")!.Value.Value;
+
+        // 相同内容的另一个数组不应被当作变化，缓存仍保留原值实例
+        await FeedAsync(monitor, Good("d1", "t1", "40001", new byte[] { 1, 2, 3 }));
+        Assert.Same(cached, monitor.Get("d1", "t1")!.Value.Value);
+
+        var changed = new byte[] { 1, 2, 4 };
+        await FeedAsync(monitor, Good("d1", "t1", "40001", changed));
+        Assert.Same(changed, monitor.Get("d1", "t1")!.Value.Value);
+    }
+
+    [Fact]
     public async Task SubscribeAsync_QualityChange_IsPublished()
     {
         var monitor = CreateMonitor();

@@ -98,4 +98,38 @@ public class OpcUaDriverSubscriptionTests
         Assert.Equal(1500, item.SamplingInterval);
         Assert.Equal(1u, item.QueueSize);
     }
+
+    [Fact]
+    public void TryCreateWriteValue_SupportedValue_ReturnsWriteValue()
+    {
+        var point = new TagPointConfiguration { TagId = "t1", Address = "ns=2;s=Tag" };
+
+        Assert.True(OpcUaDriver.TryCreateWriteValue(point, 42, out var writeValue, out var error));
+
+        Assert.Null(error);
+        Assert.NotNull(writeValue);
+        Assert.Equal(NodeId.Parse(point.Address), writeValue.NodeId);
+        Assert.Equal(Attributes.Value, writeValue.AttributeId);
+        Assert.NotNull(writeValue.Value);
+    }
+
+    [Fact]
+    public void TryCreateWriteValue_UnsupportedValue_ReturnsFalseWithoutThrowing()
+    {
+        var point = new TagPointConfiguration { TagId = "t1", Address = "ns=2;s=Tag" };
+
+        Assert.False(OpcUaDriver.TryCreateWriteValue(point, new object(), out var writeValue, out var error));
+
+        Assert.Null(writeValue);
+        Assert.Contains("cannot be written", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryCreateWriteValue_InvalidAddress_ReturnsFalse()
+    {
+        var point = new TagPointConfiguration { TagId = "t1", Address = "not a node id" };
+
+        Assert.False(OpcUaDriver.TryCreateWriteValue(point, 42, out _, out var error));
+        Assert.Contains("Invalid OPC UA address", error, StringComparison.Ordinal);
+    }
 }

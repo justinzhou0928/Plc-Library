@@ -100,7 +100,7 @@ dotnet pack PlcLibrary.slnx -c Release -o ./artifacts/pkg
 
 ## 项目代码约定
 
-- `net8.0`，遵循 `.editorconfig`（4 空格、CRLF、块命名空间、显式 using）
+- `net8.0` / `net10.0` 多目标，遵循 `.editorconfig`（4 空格、CRLF、块命名空间、显式 using）
 - 简单构造用主构造函数；复杂初始化用普通构造函数
 - 公开契约放 `Interfaces`/`Models`，内部实现放 `Engine`，用顶级 `internal` 类型
 - 驱动统一继承 `ProtocolDriverBase<TClient>`；`Connect/Disconnect/Read/Write` 保留协议差异
@@ -110,6 +110,7 @@ dotnet pack PlcLibrary.slnx -c Release -o ./artifacts/pkg
 - 传输级故障置 `Faulted`（`TransportFailureDetector`）；业务/点位错误返回 `DriverResult.Bad`，不抛异常
 - `ReadAsync` 结果必须与输入点位一一对应；不支持的类型返回 `BadConfigError`，不静默回退
 - 配置默认值放各自 `*DriverConfig`/`*Options`；单类算法常量用 `private const`；固定且单次使用的值直接内联
+- 枚举型连接串值必须 fail-fast：非法字符串在 `*DriverConfig.Parse` 抛 `InvalidOperationException`，空值才使用默认值
 - Meter/ActivitySource 标识统一由 `PlcMetrics.Meter` 提供，`PlcActivity` 复用其 `Name`/`Version`
 
 ## 测试要求
@@ -149,8 +150,8 @@ dotnet pack PlcLibrary.slnx -c Release -o ./artifacts/pkg
 不在本文件复制限制清单；统一维护在：
 
 - [DEVELOPMENT.md「已知限制与技术债」](./DEVELOPMENT.md#已知限制与技术债)
-- [当前评估 §5](./docs/ASSESSMENT-2026-11-03.md#5-缺陷与风险清单)
-- [历史评估 §5](./docs/ASSESSMENT-2026-11.md#5-缺陷与风险清单)
+- [CHANGELOG.md](./CHANGELOG.md)（2.x 修复与行为变更）
+- [历史评估 §5](./docs/ASSESSMENT-2026-11-03.md#5-缺陷与风险清单)
 
 ## 提交前清单
 

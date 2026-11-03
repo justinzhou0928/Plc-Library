@@ -18,7 +18,7 @@ using PlcLibrary.Pipeline.Interfaces;
 
 namespace PlcLibrary.Controller.Engine
 {
-    internal sealed class TaskScheduler : IDeviceScheduler
+    internal sealed class TaskScheduler : IDeviceScheduler, IDisposable
     {
         private readonly IServiceProvider _sp;
         private readonly ILogger<TaskScheduler> _logger;
@@ -29,6 +29,7 @@ namespace PlcLibrary.Controller.Engine
         private readonly ConcurrentDictionary<string, RestartState> _restarts = new();
         private readonly SemaphoreSlim _applyLock = new(1, 1);
         private int _stopping;
+        private int _resourcesDisposed;
 
         public TaskScheduler(
             IServiceProvider sp,
@@ -38,7 +39,10 @@ namespace PlcLibrary.Controller.Engine
         {
             _sp = sp;
             _logger = logger;
-            _factories = factories.ToDictionary(f => f.ProtocolDriverName);
+            // 幂等注册：同一协议重复 AddDriver 时保留最后一个工厂，避免 ToDictionary 抛重复键
+            _factories = factories
+                .GroupBy(f => f.ProtocolDriverName, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Last(), StringComparer.Ordinal);
             _pipeline = pipeline;
         }
 
@@ -82,7 +86,10 @@ namespace PlcLibrary.Controller.Engine
                 {
                     ct.ThrowIfCancellationRequested();
                     if (!desired.ContainsKey(id))
+                    {
+                        _restarts.TryRemove(id, out _);
                         await StopActuatorAsync(id).ConfigureAwait(false);
+                    }
                 }
 
                 foreach (var (id, device) in desired)
@@ -111,6 +118,8 @@ namespace PlcLibrary.Controller.Engine
                     }
                     else if (_activeConfigs.TryGetValue(id, out var old) && HasSignificantChange(old, device))
                     {
+                        // 配置已变化：旧的退避状态不再适用，重置后再重建
+                        _restarts.TryRemove(id, out _);
                         await StopActuatorAsync(id).ConfigureAwait(false);
                         try
                         {
@@ -257,10 +266,15 @@ namespace PlcLibrary.Controller.Engine
             return Task.FromResult<IReadOnlyList<DeviceHealthInfo>>(list);
         }
 
-        internal void DisposeResources()
+        /// <summary>释放调度器持有的同步原语；由宿主 Dispose 调用，可重复调用。</summary>
+        public void Dispose()
         {
+            if (Interlocked.Exchange(ref _resourcesDisposed, 1) != 0)
+                return;
             _applyLock.Dispose();
         }
+
+        internal void DisposeResources() => Dispose();
 
         private async Task StartActuatorAsync(DeviceConfiguration device, CancellationToken ct)
         {
@@ -271,15 +285,43 @@ namespace PlcLibrary.Controller.Engine
             if (!factory.SupportsPush)
                 await ValidateDriverConfigurationAsync(factory, device, ct).ConfigureAwait(false);
 
-            var collector = factory.SupportsPush
-                ? await CreatePushCollectorAsync(factory, device, ct).ConfigureAwait(false)
-                : CreatePollingCollector(device);
+            IDeviceCollector? collector = null;
+            TaskActuator? actuator = null;
+            var registered = false;
+            try
+            {
+                collector = factory.SupportsPush
+                    ? await CreatePushCollectorAsync(factory, device, ct).ConfigureAwait(false)
+                    : CreatePollingCollector(device);
 
-            var actuator = ActivatorUtilities.CreateInstance<TaskActuator>(_sp, device, collector);
-            _actuators[device.Id] = actuator;
-            _activeConfigs[device.Id] = device;
-            await actuator.StartAsync().ConfigureAwait(false);
-            ControllerLog.LogTaskStarted(_logger, device.Id, device.Protocol, device.CollectionInterval);
+                actuator = ActivatorUtilities.CreateInstance<TaskActuator>(_sp, device, collector);
+                _actuators[device.Id] = actuator;
+                registered = true;
+                _activeConfigs[device.Id] = device;
+                await actuator.StartAsync().ConfigureAwait(false);
+                ControllerLog.LogTaskStarted(_logger, device.Id, device.Protocol, device.CollectionInterval);
+            }
+            catch
+            {
+                // 尚未交给调度器字典的 collector/actuator 必须在这里释放，避免热更新反复失败时泄漏订阅/驱动
+                if (!registered)
+                {
+                    if (actuator is not null)
+                    {
+                        try
+                        { await actuator.DisposeAsync().ConfigureAwait(false); }
+                        catch { }
+                    }
+                    else if (collector is not null)
+                    {
+                        try
+                        { await collector.DisposeAsync().ConfigureAwait(false); }
+                        catch { }
+                    }
+                }
+
+                throw;
+            }
         }
 
         private static async Task ValidateDriverConfigurationAsync(
@@ -295,8 +337,19 @@ namespace PlcLibrary.Controller.Engine
             IDriverFactory factory, DeviceConfiguration device, CancellationToken ct)
         {
             var driver = await factory.CreateAsync(device, ct).ConfigureAwait(false);
-            return ActivatorUtilities.CreateInstance<PushCollector>(
-                _sp, (IPushProtocolDriver)driver, device, _pipeline);
+            try
+            {
+                return ActivatorUtilities.CreateInstance<PushCollector>(
+                    _sp, (IPushProtocolDriver)driver, device, _pipeline);
+            }
+            catch
+            {
+                // PushCollector 构造失败时驱动尚未被任何对象接管，必须在这里释放
+                try
+                { await driver.DisposeAsync().ConfigureAwait(false); }
+                catch { }
+                throw;
+            }
         }
 
         private PollingCollector CreatePollingCollector(DeviceConfiguration device)

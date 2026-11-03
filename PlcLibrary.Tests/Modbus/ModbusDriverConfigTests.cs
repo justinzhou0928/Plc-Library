@@ -58,4 +58,20 @@ public class ModbusDriverConfigTests
         var config = ModbusDriverConfig.Parse("host:10.0.0.1;byteorder:CDAB");
         Assert.Equal("CDAB", config.ByteOrder);
     }
+
+    [Fact]
+    public void Parse_InvalidParity_Throws()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => ModbusDriverConfig.Parse("host:COM3;parity:bogus"));
+        Assert.Contains("Parity", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_InvalidStopBits_Throws()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => ModbusDriverConfig.Parse("host:COM3;stopbits:bogus"));
+        Assert.Contains("StopBits", ex.Message, StringComparison.Ordinal);
+    }
 }

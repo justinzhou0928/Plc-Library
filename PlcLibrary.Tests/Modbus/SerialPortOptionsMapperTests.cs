@@ -13,7 +13,6 @@ public class SerialPortOptionsMapperTests
     [InlineData("Even", Parity.Even)]
     [InlineData("Mark", Parity.Mark)]
     [InlineData("Space", Parity.Space)]
-    [InlineData("bogus", Parity.None)]
     [InlineData("", Parity.None)]
     [InlineData(null, Parity.None)]
     public void ParseParity_ReturnsExpected(string? value, Parity expected)
@@ -23,9 +22,16 @@ public class SerialPortOptionsMapperTests
     [InlineData("One", StopBits.One)]
     [InlineData("Two", StopBits.Two)]
     [InlineData("OnePointFive", StopBits.OnePointFive)]
-    [InlineData("bogus", StopBits.One)]
     [InlineData("", StopBits.One)]
     [InlineData(null, StopBits.One)]
     public void ParseStopBits_ReturnsExpected(string? value, StopBits expected)
         => Assert.Equal(expected, SerialPortOptionsMapper.ParseStopBits(value));
+
+    [Fact]
+    public void ParseParity_Unknown_Throws()
+        => Assert.Throws<InvalidOperationException>(() => SerialPortOptionsMapper.ParseParity("bogus"));
+
+    [Fact]
+    public void ParseStopBits_Unknown_Throws()
+        => Assert.Throws<InvalidOperationException>(() => SerialPortOptionsMapper.ParseStopBits("bogus"));
 }

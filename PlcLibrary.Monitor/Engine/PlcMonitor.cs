@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -177,7 +178,17 @@ namespace PlcLibrary.Monitor.Engine
         }
 
         private static bool Changed(DriverResult a, DriverResult b)
-            => a.Status != b.Status || !object.Equals(a.Value, b.Value);
+            => a.Status != b.Status || !ValueEquals(a.Value, b.Value);
+
+        /// <summary>数组值按结构比较；否则 byte[] 等每次新实例都会被误判为变化。</summary>
+        private static bool ValueEquals(object? a, object? b)
+        {
+            if (ReferenceEquals(a, b))
+                return true;
+            if (a is Array left && b is Array right)
+                return StructuralComparisons.StructuralEqualityComparer.Equals(left, right);
+            return object.Equals(a, b);
+        }
 
         private static bool Matches(Subscription sub, PlcPointId key)
             => string.Equals(sub.DeviceId, key.DeviceId, StringComparison.Ordinal)

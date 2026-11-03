@@ -19,7 +19,7 @@
 | [AGENTS.md](./AGENTS.md) | AI 代理/贡献者 | 强制规则、命令、仓库地图、文档维护约定 |
 | [docs/SCOPE.md](./docs/SCOPE.md) | 选型/架构 | 库职责与 SCADA 职责边界、补齐优先级 |
 | [CHANGELOG.md](./CHANGELOG.md) | 使用者 | 版本历史与不兼容变更 |
-| [docs/ASSESSMENT-2026-11-03.md](./docs/ASSESSMENT-2026-11-03.md) | 评审者 | 2026-11-03 工业级评估（本轮基线） |
+| [docs/ASSESSMENT-2026-11-03.md](./docs/ASSESSMENT-2026-11-03.md) | 评审者 | 2026-11-03 v1.3.5 历史评估快照（非当前行为依据） |
 | [docs/ASSESSMENT-2026-11.md](./docs/ASSESSMENT-2026-11.md) | 评审者 | 2026-11-02 历史评估快照（非当前行为依据） |
 
 > 行为与配置以 README/DEVELOPMENT 为准；评估报告是**带日期的快照**，其中的"待处理"项可能已经变化。
@@ -41,7 +41,7 @@
 
 > `DeviceConfiguration.Protocol` 必须与驱动上的 `[ProtocolDriverName]` **完全一致（区分大小写）**。写成 `"OPC UA"`/`"OpcUa"` 不会抛异常，该设备会被跳过并记录 `LogProtocolUnregistered`。
 >
-> 各驱动的离线验证等级与未覆盖项见 [评估报告](./docs/ASSESSMENT-2026-11-03.md#4-驱动完整性验证矩阵)。
+> 各驱动的离线验证等级与未覆盖项见 [历史评估报告](./docs/ASSESSMENT-2026-11-03.md#4-驱动完整性验证矩阵)；2.x 变更以 CHANGELOG 为准。
 
 ## 安装
 
@@ -61,6 +61,9 @@ dotnet add package PlcLibrary.AllenBradley
 dotnet add package PlcLibrary.Bacnet
 dotnet add package PlcLibrary.Monitor
 ```
+
+> 2.1 起包同时提供 `net8.0` 与 `net10.0` 资产。核心包只引用 `Microsoft.Extensions.*` 抽象包，
+> 不再把 `Microsoft.Extensions.Hosting` 的日志/JSON/文件提供程序等传递依赖带给宿主。
 
 ## 快速开始
 
@@ -186,6 +189,8 @@ internal sealed class DeviceLoader(IConfiguration config, IPlcGateway gateway) :
 
 值可用单/双引号包裹，以保留 `;`、冒号和首尾空格，例如 `password:"a;b"`；引号内的同种引号用双写转义（`"a""b"` → `a"b`）。未加引号的值会 Trim（保持旧行为）。
 
+> 枚举型值严格校验：S7 `cpu`、Modbus `parity`/`stopbits`、OPC UA `security` 的非法值会在构造驱动配置时抛 `InvalidOperationException`，不会静默回退默认值。空值仍按各字段默认值处理。
+
 #### S7
 
 | 字段 | 默认值 | 说明 |
@@ -195,7 +200,7 @@ internal sealed class DeviceLoader(IConfiguration config, IPlcGateway gateway) :
 | rack | 0 | 机架 |
 | slot | 0 | 插槽 |
 | timeout | 3000 | 读写超时 (ms) |
-| cpu | S71200 | `CpuType`（S7200/S7300/S7400/S71200/S71500/...） |
+| cpu | S71200 | `CpuType`（S7200/S7300/S7400/S71200/S71500/...）；非法值抛异常，不再回退默认 CPU |
 
 示例：`host:192.168.1.1;port:102;rack:0;slot:1;cpu:S71500`
 
@@ -225,9 +230,9 @@ S7 STRING 必须带长度：`DB6000.DBB504.100` 读 DB6000 从字节 504 起的 
 |------|--------|------|
 | host | - | 串口号（如 `COM3`） |
 | baudrate | 9600 | 波特率 |
-| parity | None | None/Odd/Even/Mark/Space |
+| parity | None | None/Odd/Even/Mark/Space；非法值抛异常 |
 | databits | 8 | 数据位 |
-| stopbits | One | One/OnePointFive/Two |
+| stopbits | One | One/OnePointFive/Two；非法值抛异常 |
 | timeout | 3000 | 超时 (ms) |
 | slaveid | 1 | 从站 ID |
 | byteorder | - | 设备级默认字节序 |
@@ -280,7 +285,7 @@ new TagPointConfiguration
 |------|--------|------|
 | endpoint | `opc.tcp://localhost:4840` | 服务端端点 |
 | username / password | - | 用户名/密码（空则匿名） |
-| security | None | None / Sign / SignAndEncrypt；端点实际安全模式低于配置时连接失败，不静默降级 |
+| security | None | None / Sign / SignAndEncrypt；非法值抛异常，端点实际安全模式低于配置时连接失败，不静默降级 |
 | timeout | 5000 | 操作超时 (ms) |
 | publishinginterval | 1000 | 订阅发布间隔 (ms) |
 | sessiontimeout | 60000 | 会话超时 (ms) |
@@ -460,7 +465,7 @@ public sealed class MyService(IPlcMonitor monitor)
 ```
 
 - 缓存键 `DeviceId + TagId`：不同设备同 TagId/同地址互不干扰
-- 订阅先返回当前快照，之后只在变化时产出
+- 订阅先返回当前快照，之后只在变化时产出；数组值按结构比较，相同内容不会重复通知
 - 订阅通道容量 1（latest-wins）：消费慢时只保证最新值，中间值可能跳过
 - `Monitor.EntryIdleTimeout`（默认 5 分钟，`00:00:00` 禁用）清理长期无数据的条目
 - 指标：`plc.monitor.updates`、`plc.monitor.changes`（共用 Meter `PlcLibrary`）
@@ -480,7 +485,7 @@ Meter `PlcLibrary`，读/写/获取指标带 `device.id`、`device.protocol`，�
 | `plc.write.total` | Counter\<long\> | 写操作数 |
 | `plc.acquire.duration` | Histogram\<double\> | 获取驱动耗时（含连接） |
 | `plc.pipeline.dispatched` | Counter\<long\> | 管道分发点数 |
-| `plc.pipeline.dropped` | Counter\<long\> | 管道写入队列超时丢弃点数（订阅通道 `DropOldest` 不做逐点计数） |
+| `plc.pipeline.dropped` | Counter\<long\> | 管道写入队列超时丢弃点数（不含 handler 超时/异常） |
 
 `ActivitySource("PlcLibrary")` 的 Span：`PlcLibrary.ReadAsync`、`PlcLibrary.WriteAsync`、`PlcLibrary.Acquire`、`PlcLibrary.BrowseAsync`、`PlcLibrary.Dispatch`（标签见 DEVELOPMENT）。
 
@@ -604,7 +609,7 @@ app.MapHealthChecks("/healthz");
 | 串口物理层 | 离线仅覆盖参数映射与失败路径，RTU/ASCII 帧需真机/虚拟串口对 |
 | 厂商语义 | 字节序、位地址等以模拟器 + 规范为准，建议上线前做一次真机联调 |
 
-未修复项、优先级与验证矩阵见 [docs/ASSESSMENT-2026-11-03.md](./docs/ASSESSMENT-2026-11-03.md)；工程决策与测试策略见 [DEVELOPMENT.md](./DEVELOPMENT.md)。
+历史评估与验证矩阵见 [docs/ASSESSMENT-2026-11-03.md](./docs/ASSESSMENT-2026-11-03.md)（v1.3.5 快照）；2.x 的变更、修复与未覆盖项以 [CHANGELOG.md](./CHANGELOG.md) 和 [DEVELOPMENT.md](./DEVELOPMENT.md) 为准。
 
 ## 致谢
 

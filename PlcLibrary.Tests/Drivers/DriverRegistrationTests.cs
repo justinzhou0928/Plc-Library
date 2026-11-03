@@ -124,4 +124,18 @@ public class DriverRegistrationTests
 
         Assert.NotNull(factory);
     }
+
+    [Fact]
+    public void AddDriver_Duplicate_DoesNotThrowOnSchedulerResolution()
+    {
+        var services = CreateServices();
+        services.AddLogging();
+        services.AddDriver<S7Driver>();
+        services.AddDriver<S7Driver>();
+
+        using var provider = services.BuildServiceProvider();
+        var scheduler = provider.GetRequiredService<PlcLibrary.Controller.Engine.TaskScheduler>();
+
+        Assert.NotNull(scheduler);
+    }
 }

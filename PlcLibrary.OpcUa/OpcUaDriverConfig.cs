@@ -1,3 +1,5 @@
+using System;
+using Opc.Ua;
 using PlcLibrary.DriverDomain.Parser;
 
 namespace PlcLibrary.OpcUa
@@ -5,6 +7,8 @@ namespace PlcLibrary.OpcUa
     /// <summary>OPC UA 连接配置</summary>
     public sealed record OpcUaDriverConfig
     {
+        private static readonly string[] AllowedSecurityModes = ["None", "Sign", "SignAndEncrypt"];
+
         /// <summary>OPC UA 服务端端点。</summary>
         public string Endpoint { get; init; } = "opc.tcp://localhost:4840";
 
@@ -14,7 +18,7 @@ namespace PlcLibrary.OpcUa
         /// <summary>密码。</summary>
         public string? Password { get; init; }
 
-        /// <summary>安全模式：None / Sign / SignAndEncrypt。</summary>
+        /// <summary>安全模式：None / Sign / SignAndEncrypt；非法值在 <see cref="Parse"/> 时抛异常。</summary>
         public string Security { get; init; } = "None";
 
         /// <summary>操作超时（毫秒）。</summary>
@@ -41,8 +45,37 @@ namespace PlcLibrary.OpcUa
         /// <summary>受信任的颁发者证书存储目录（OPC UA 堆栈配置校验的必填项）。</summary>
         public string PkiIssuerPath { get; init; } = "PlcLibrary.OpcUa/pki/issuer";
 
-        /// <summary>从连接字符串绑定配置。</summary>
+        /// <summary>从连接字符串绑定配置；非法安全模式直接抛异常，避免静默降级为 None。</summary>
         public static OpcUaDriverConfig Parse(string connectionString)
-            => ConnectionStringBinder.Bind<OpcUaDriverConfig>(connectionString);
+        {
+            var config = ConnectionStringBinder.Bind<OpcUaDriverConfig>(connectionString);
+            if (!TryParseSecurityMode(config.Security, out _))
+            {
+                throw new InvalidOperationException(
+                    $"Invalid OPC UA security '{config.Security}'. Allowed values: None, Sign, SignAndEncrypt.");
+            }
+
+            return config;
+        }
+
+        /// <summary>严格解析安全模式；只接受 None/Sign/SignAndEncrypt（大小写不敏感）。</summary>
+        internal static bool TryParseSecurityMode(string? value, out MessageSecurityMode mode)
+        {
+            mode = MessageSecurityMode.None;
+            if (string.IsNullOrWhiteSpace(value))
+                return false;
+
+            var name = value.Trim();
+            foreach (var allowed in AllowedSecurityModes)
+            {
+                if (!string.Equals(name, allowed, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                mode = Enum.Parse<MessageSecurityMode>(allowed);
+                return true;
+            }
+
+            return false;
+        }
     }
 }

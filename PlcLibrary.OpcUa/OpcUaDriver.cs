@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Opc.Ua;
@@ -24,6 +25,7 @@ namespace PlcLibrary.OpcUa
         private const uint SubscriptionKeepAliveCount = 10;
         private const uint SubscriptionLifetimeCount = 20;
         private const uint MaxNotificationsPerPublish = 1000;
+        private const int PushQueueCapacity = 1024;
 
         private readonly ILogger<OpcUaDriver> _logger;
         private readonly OpcUaDriverConfig _config;
@@ -219,19 +221,16 @@ namespace PlcLibrary.OpcUa
             for (var i = 0; i < entryList.Count; i++)
             {
                 ct.ThrowIfCancellationRequested();
-                if (TryParseNodeId(entryList[i].Key.Address, out var nodeId))
+                if (TryCreateWriteValue(entryList[i].Key, entryList[i].Value, out var writeValue, out var error))
                 {
                     validIndices[collection.Count] = i;
-                    collection.Add(new WriteValue
-                    {
-                        NodeId = nodeId,
-                        AttributeId = Attributes.Value,
-                        Value = new DataValue(new Variant(entryList[i].Value))
-                    });
+                    collection.Add(writeValue!);
                 }
                 else
                 {
-                    results[i] = DriverResult.Bad(entryList[i].Key.Address, QualityCode.BadConfigError, "Invalid OPC UA address");
+                    // 单点值无法编码为 Variant 时只影响该点，不能让整批写抛异常。
+                    results[i] = DriverResult.Bad(
+                        entryList[i].Key.Address, QualityCode.BadConfigError, error ?? "Invalid OPC UA write value");
                 }
             }
 
@@ -240,9 +239,16 @@ namespace PlcLibrary.OpcUa
                 try
                 {
                     var response = await session.WriteAsync(null, collection, ct).ConfigureAwait(false);
-                    for (var j = 0; j < response.Results.Count; j++)
+                    for (var j = 0; j < collection.Count; j++)
                     {
                         var idx = validIndices[j];
+                        if (j >= response.Results.Count)
+                        {
+                            results[idx] = DriverResult.Bad(
+                                entryList[idx].Key.Address, QualityCode.BadCommFailure, "No write result returned by server");
+                            continue;
+                        }
+
                         results[idx] = StatusCode.IsGood(response.Results[j])
                             ? DriverResult.Good(entryList[idx].Key.Address, null)
                             : DriverResult.Bad(entryList[idx].Key.Address, QualityCode.BadCommFailure, response.Results[j].ToString());
@@ -401,6 +407,16 @@ namespace PlcLibrary.OpcUa
             for (var i = 0; i < vpCount; i++)
                 addresses[i] = validPoints[i].Address;
 
+            // SDK 的 FastDataChangeCallback 是同步回调；异步写管道不能直接 fire-and-forget，
+            // 否则同一订阅的连续通知可能乱序，且停机时仍在写。这里用单消费者队列串行化。
+            var pending = Channel.CreateBounded<DriverResult>(new BoundedChannelOptions(PushQueueCapacity)
+            {
+                SingleReader = true,
+                SingleWriter = false,
+                FullMode = BoundedChannelFullMode.DropWrite,
+            });
+
+            Task? consumer = null;
             session.AddSubscription(sub);
             try
             {
@@ -433,11 +449,8 @@ namespace PlcLibrary.OpcUa
                         try
                         {
                             var result = CreatePushResult(addresses[idx], item.Value);
-                            onData(result, ct).AsTask().ContinueWith(t =>
-                            {
-                                if (t.IsFaulted && t.Exception is not null)
-                                    OpcUaLog.LogReadPointFailed(_logger, t.Exception.InnerException!, addresses[idx]);
-                            }, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                            if (!pending.Writer.TryWrite(result))
+                                OpcUaLog.LogPushQueueFull(_logger, addresses[idx]);
                         }
                         catch (Exception ex)
                         {
@@ -445,6 +458,8 @@ namespace PlcLibrary.OpcUa
                         }
                     }
                 };
+
+                consumer = ConsumePushQueueAsync(pending.Reader, onData, ct);
             }
             catch
             {
@@ -465,6 +480,38 @@ namespace PlcLibrary.OpcUa
 
             try
             { await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+            finally
+            {
+                pending.Writer.TryComplete();
+                if (consumer is not null)
+                {
+                    try
+                    { await consumer.ConfigureAwait(false); }
+                    catch (OperationCanceledException) { }
+                }
+            }
+        }
+
+        /// <summary>串行消费订阅通知，保证同一订阅的 onData 不并发、不乱序。</summary>
+        private async Task ConsumePushQueueAsync(
+            ChannelReader<DriverResult> reader,
+            Func<DriverResult, CancellationToken, ValueTask> onData,
+            CancellationToken ct)
+        {
+            try
+            {
+                await foreach (var result in reader.ReadAllAsync(ct).ConfigureAwait(false))
+                {
+                    try
+                    { await onData(result, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        OpcUaLog.LogNotificationFailed(_logger, ex, result.Address);
+                    }
+                }
+            }
             catch (OperationCanceledException) { }
         }
 
@@ -623,14 +670,44 @@ namespace PlcLibrary.OpcUa
             }
         }
 
-        /// <summary>连接串 security 字段 → MessageSecurityMode 映射（大小写不敏感，默认 None）。</summary>
+        /// <summary>连接串 security 字段 → MessageSecurityMode；非法值直接抛异常，不静默降级。</summary>
         private static MessageSecurityMode ParseSecurityMode(string? security)
-            => security?.Trim().ToUpperInvariant() switch
+            => OpcUaDriverConfig.TryParseSecurityMode(security, out var mode)
+                ? mode
+                : throw new InvalidOperationException(
+                    $"Invalid OPC UA security '{security}'. Allowed values: None, Sign, SignAndEncrypt.");
+
+        /// <summary>
+        /// 将单个点位编码为 OPC UA WriteValue；地址或值不合法时返回 false，由调用方标 BadConfigError。
+        /// 这里必须逐点隔离：Variant 对不支持的类型会抛异常，不能让整批写失败。
+        /// </summary>
+        internal static bool TryCreateWriteValue(
+            TagPointConfiguration point, object? value, out WriteValue? writeValue, out string? error)
+        {
+            writeValue = null;
+            error = null;
+            if (!TryParseNodeId(point.Address, out var nodeId))
             {
-                "SIGN" => MessageSecurityMode.Sign,
-                "SIGNANDENCRYPT" => MessageSecurityMode.SignAndEncrypt,
-                _ => MessageSecurityMode.None
-            };
+                error = "Invalid OPC UA address";
+                return false;
+            }
+
+            try
+            {
+                writeValue = new WriteValue
+                {
+                    NodeId = nodeId,
+                    AttributeId = Attributes.Value,
+                    Value = new DataValue(new Variant(value))
+                };
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = $"OPC UA value of type '{value?.GetType().Name ?? "null"}' cannot be written: {ex.Message}";
+                return false;
+            }
+        }
 
         private static bool TryParseNodeId(string address, out NodeId nodeId)
         {

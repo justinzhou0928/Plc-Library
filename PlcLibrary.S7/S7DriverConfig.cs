@@ -1,4 +1,4 @@
-using System;
+using Microsoft.Extensions.Configuration;
 using PlcLibrary.DriverDomain.Parser;
 using S7.Net;
 
@@ -22,18 +22,13 @@ namespace PlcLibrary.S7
         /// <summary>槽号</summary>
         public short Slot { get; init; }
 
-        /// <summary>CPU 类型</summary>
+        /// <summary>CPU 类型；连接串可用 <c>cpu</c> 别名配置，非法值在 <see cref="Parse"/> 时抛异常</summary>
+        [ConfigurationKeyName("cpu")]
         public CpuType CpuType { get; init; } = CpuType.S71200;
 
         /// <summary>从连接串解析配置</summary>
         /// <param name="connectionString">连接字符串</param>
         public static S7DriverConfig Parse(string connectionString)
-        {
-            var config = ConnectionStringBinder.Bind<S7DriverConfig>(connectionString, "cpu");
-            var dict = KeyValueConnectionString.Parse(connectionString);
-            if (dict.TryGetValue("cpu", out var cpu) && Enum.TryParse<CpuType>(cpu, true, out var cpuType))
-                config = config with { CpuType = cpuType };
-            return config;
-        }
+            => ConnectionStringBinder.Bind<S7DriverConfig>(connectionString, "cpu");
     }
 }

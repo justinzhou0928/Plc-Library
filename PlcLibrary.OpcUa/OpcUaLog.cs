@@ -34,6 +34,10 @@ namespace PlcLibrary.OpcUa
         internal static partial void LogNotificationFailed(ILogger logger, Exception ex, string address);
 
         [LoggerMessage(Level = LogLevel.Debug,
+            Message = "OPC UA 推送队列已满，丢弃通知 Address={Address}")]
+        internal static partial void LogPushQueueFull(ILogger logger, string address);
+
+        [LoggerMessage(Level = LogLevel.Debug,
             Message = "OPC UA 单点读取失败 Address={Address}")]
         internal static partial void LogReadPointFailed(ILogger logger, Exception ex, string address);
 

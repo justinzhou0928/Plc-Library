@@ -1,9 +1,6 @@
 using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -22,12 +19,9 @@ namespace PlcLibrary.Pipeline.Engine
     internal sealed class DriverResultPipeline : IDataPipeline
     {
 
-        private const int SubscriberCapacity = 1000;
-
         private readonly IServiceProvider _sp;
         private readonly ILogger<DriverResultPipeline> _logger;
         private readonly Channel<DriverResult> _channel;
-        private readonly ConcurrentDictionary<Guid, Channel<DriverResult>> _subscribers = new();
         private readonly int _maxHandlerParallelism;
         private readonly TimeSpan _handlerTimeout;
         private readonly TimeSpan _enqueueTimeout;
@@ -70,17 +64,10 @@ namespace PlcLibrary.Pipeline.Engine
         internal void StopConsuming()
         {
             _channel.Writer.TryComplete();
-            foreach (var (_, sub) in _subscribers)
-                sub.Writer.TryComplete();
             PipelineLog.LogPipelineStopped(_logger);
         }
 
-        internal void DisposeResources()
-        {
-            _channel.Writer.TryComplete();
-            foreach (var (_, sub) in _subscribers)
-                sub.Writer.TryComplete();
-        }
+        internal void DisposeResources() => _channel.Writer.TryComplete();
 
         public async ValueTask HandleAsync(DriverResult result, CancellationToken ct)
         {
@@ -104,30 +91,6 @@ namespace PlcLibrary.Pipeline.Engine
                 // 管道消费者长时间不前进（handler 阻塞等）：丢弃本点并继续采集，避免采集循环被永久反压。
                 PlcMetrics.PipelineDropped.Add(1, new TagList { { "device.id", result.DeviceId } });
                 PipelineLog.LogEnqueueTimedOut(_logger, result.Address, _enqueueTimeout);
-            }
-        }
-
-        public async IAsyncEnumerable<DriverResult> ReadAsync(
-            [EnumeratorCancellation] CancellationToken ct = default)
-        {
-            var sub = Channel.CreateBounded<DriverResult>(new BoundedChannelOptions(SubscriberCapacity)
-            {
-                FullMode = BoundedChannelFullMode.DropOldest,
-                SingleReader = true,
-                SingleWriter = false,
-            });
-            var id = Guid.NewGuid();
-            _subscribers[id] = sub;
-
-            try
-            {
-                await foreach (var item in sub.Reader.ReadAllAsync(ct).ConfigureAwait(false))
-                    yield return item;
-            }
-            finally
-            {
-                if (_subscribers.TryRemove(id, out _))
-                    sub.Writer.TryComplete();
             }
         }
 
@@ -173,17 +136,6 @@ namespace PlcLibrary.Pipeline.Engine
                 }
             }
 
-            if (!_subscribers.IsEmpty)
-            {
-                foreach (var (_, sub) in _subscribers)
-                {
-                    if (!sub.Writer.TryWrite(result))
-                    {
-                        PlcMetrics.PipelineDropped.Add(1, new TagList { { "device.id", result.DeviceId } });
-                        PipelineLog.LogSubscriberDropped(_logger, result.Address);
-                    }
-                }
-            }
         }
 
         /// <summary>调用单个 IDataHandler，异常与超时互不影响其它 handler。</summary>
@@ -192,17 +144,25 @@ namespace PlcLibrary.Pipeline.Engine
             CancellationTokenSource? linked = null;
             try
             {
+                // 快路径：PlcMonitor 等同步 handler 已在调用内完成，无需链接 CTS/定时器。
+                var pending = handler.HandleAsync(result, ct);
+                if (pending.IsCompletedSuccessfully)
+                {
+                    // 同步完成也必须 GetResult，释放 IValueTaskSource 等池化实现
+                    pending.GetAwaiter().GetResult();
+                    return;
+                }
+
                 if (_handlerTimeout <= TimeSpan.Zero)
                 {
-                    await handler.HandleAsync(result, ct).ConfigureAwait(false);
+                    await pending.ConfigureAwait(false);
                     return;
                 }
 
                 linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 linked.CancelAfter(_handlerTimeout);
                 // WaitAsync 提供硬上限：即使 handler 忽略取消令牌，管道消费者也不会被永久卡住。
-                await handler.HandleAsync(result, linked.Token)
-                    .AsTask()
+                await pending.AsTask()
                     .WaitAsync(_handlerTimeout, ct)
                     .ConfigureAwait(false);
             }

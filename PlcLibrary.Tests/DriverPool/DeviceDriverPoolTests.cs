@@ -247,6 +247,63 @@ public class DeviceDriverPoolTests
     }
 
     [Fact]
+    public async Task ReadAsync_IoCircuitBreaker_IsIsolatedPerDevice()
+    {
+        var goodDriver = new Mock<IProtocolDriver>();
+        goodDriver.Setup(d => d.DriverStatus).Returns(DriverStatus.Connected);
+        goodDriver.Setup(d => d.ReadAsync(It.IsAny<TagPointConfiguration[]>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([DriverResult.Good("40001", 42)]);
+
+        var device2 = _device with { Id = "plc-02" };
+        var createCount = 0;
+        _factory.Setup(f => f.CreateAsync(It.IsAny<DeviceConfiguration>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                if (Interlocked.Increment(ref createCount) > 2)
+                    return goodDriver.Object;
+
+                var status = DriverStatus.Connected;
+                var failing = new Mock<IProtocolDriver>();
+                failing.Setup(d => d.DriverStatus).Returns(() => status);
+                failing.Setup(d => d.ReadAsync(It.IsAny<TagPointConfiguration[]>(), It.IsAny<CancellationToken>()))
+                    .Returns(async () =>
+                    {
+                        status = DriverStatus.Faulted;
+                        await Task.Yield();
+                        throw new IOException("simulated device failure");
+                    });
+                return failing.Object;
+            });
+
+        var options = new Mock<IOptions<PoolOptions>>();
+        options.Setup(o => o.Value).Returns(new PoolOptions
+        {
+            MaxConnectionsPerDevice = 2,
+            MaxRetryAttempts = 1,
+            RetryDelay = TimeSpan.FromMilliseconds(100),
+            OperationTimeout = TimeSpan.FromSeconds(1),
+            CircuitBreakerMinimumThroughput = 2,
+            CircuitBreakerFailureRatio = 0.5,
+            CircuitBreakerDuration = TimeSpan.FromSeconds(5),
+            PoolIdleTimeout = TimeSpan.Zero,
+        });
+        var pool = new DeviceDriverPool(options.Object, [_factory.Object], NullLoggerFactory.Instance);
+
+        await Assert.ThrowsAsync<IOException>(
+            () => pool.ReadAsync(_device, _device.TagPoints, CancellationToken.None));
+        await Assert.ThrowsAsync<IOException>(
+            () => pool.ReadAsync(_device, _device.TagPoints, CancellationToken.None));
+
+        // 同一连接串的另一个逻辑设备不能被第一个设备的 IO 断路器连带熔断
+        var results = await pool.ReadAsync(device2, device2.TagPoints, CancellationToken.None);
+
+        Assert.Equal(QualityCode.Good, results[0].Status);
+        goodDriver.Verify(
+            d => d.ReadAsync(It.IsAny<TagPointConfiguration[]>(), It.IsAny<CancellationToken>()), Times.Once);
+        await pool.DisposeAsync();
+    }
+
+    [Fact]
     public async Task CleanupIdlePoolsAsync_RecyclesIdlePool()
     {
         var createCount = 0;

@@ -51,4 +51,11 @@ public class S7DriverConfigTests
         Assert.Equal("10.0.0.1", config.Host);
         Assert.Equal(8080, config.Port);
     }
+
+    [Fact]
+    public void Parse_InvalidCpu_Throws()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => S7DriverConfig.Parse("cpu:NotACpu"));
+        Assert.Contains("cpu", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
 }

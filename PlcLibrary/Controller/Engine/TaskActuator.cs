@@ -70,7 +70,8 @@ namespace PlcLibrary.Controller.Engine
                 loop = _loopTask;
             }
 
-            cts?.Cancel();
+            if (cts is not null)
+                await cts.CancelAsync().ConfigureAwait(false);
 
             var completed = await Task.WhenAny(loop, Task.Delay(StopTimeout)).ConfigureAwait(false);
             if (completed != loop)

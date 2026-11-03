@@ -54,6 +54,20 @@ public class OpcUaDriverConfigTests
     }
 
     [Fact]
+    public void Parse_InvalidSecurity_Throws()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => OpcUaDriverConfig.Parse("security:NotASecurityMode"));
+        Assert.Contains("None, Sign, SignAndEncrypt", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_SecurityNumeric_Throws()
+    {
+        Assert.Throws<InvalidOperationException>(() => OpcUaDriverConfig.Parse("security:1"));
+    }
+
+    [Fact]
     public void Parse_PkiPaths()
     {
         var config = OpcUaDriverConfig.Parse(

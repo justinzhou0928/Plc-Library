@@ -4,6 +4,45 @@
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-03
+
+### 新增
+
+- 多目标 `net8.0` / `net10.0`：同一 NuGet 包同时提供两套资产，CI 覆盖双 TFM 构建/测试
+- 核心包改为最小依赖：`Hosting.Abstractions` + `Configuration`/`Options`/`Logging.Abstractions`/`DI.Abstractions`，不再引用完整 `Microsoft.Extensions.Hosting`
+- IO 断路器按 `DeviceId` 隔离；同一连接串下的不同逻辑设备不再共享熔断状态
+
+### 修复
+
+- **OPC UA 非法 `security` 静默降级**：`security` 拼写错误或未知值现在在 `OpcUaDriverConfig.Parse` 抛 `InvalidOperationException`，不再回退 `None`
+- **OPC UA 写入逐点隔离**：不支持的值/非法地址只将对应点位标 `BadConfigError`，不再让整批写抛异常；服务端少返回结果时补 `BadCommFailure`
+- **OPC UA 推送回调乱序/停机写管道**：订阅通知改为单消费者队列串行调用 `onData`，队列满时丢弃并记录，不再 fire-and-forget
+- **S7 `cpu` 静默回退**：改用 `[ConfigurationKeyName("cpu")]` 绑定，非法 CPU 值抛异常，不再保留默认 CPU
+- **Modbus 串口枚举静默回退**：`parity`/`stopbits` 非法值在解析时抛异常，不再回退 `None`/`One`
+- **调度器启动失败泄漏**：`TaskScheduler` 在 collector/actuator 未注册时释放已创建资源；实现 `IDisposable`；设备移除/配置变更时清理重启退避状态
+- **IO 断路器清理**：空闲池回收时按连接池键移除所有设备的 IO 管线，避免热更新累积
+- **Monitor 数组值误判变化**：`byte[]` 等数组按结构比较，相同内容不再触发变化通知
+- **DI 幂等**：重复 `AddPlcLibrary`/`AddPlcMonitor` 不产生多份单例/处理器；重复 `AddDriver<T>` 不再因重复键在调度器构造时崩溃
+- **管道死代码/指标口径**：移除不可达的订阅丢弃分支和 `IDataPipeline.ReadAsync`；`plc.pipeline.dropped` 明确只统计写入队列超时
+- **Mitsubishi 取消**：Connect/Read/Write 在操作边界检查取消令牌，不再完全忽略 `ct`
+
+### 变更（不兼容）
+
+- 非法 S7 `cpu`、Modbus `parity`/`stopbits`、OPC UA `security` 现在抛 `InvalidOperationException`，不再静默使用默认值
+- 包资产从仅 `net8.0` 变为 `net8.0` + `net10.0`；引用方需使用支持多目标的 NuGet/SDK
+- 内部 `IDataPipeline.ReadAsync` 删除；应用应使用 `IDataHandler` 或 `IPlcMonitor`，该接口本就 internal，不影响公共 API
+
+### 构建
+
+- 核心依赖图显著收缩（去掉 `Microsoft.Extensions.Logging.Console`、`System.Text.Json`、`System.IO.Pipelines` 等传递依赖）
+- `Microsoft.SourceLink.GitHub` 升级到 10.0.403，消除构建期 `Microsoft.Build.Tasks.Git 8.0.0` 漏洞
+- CI 同时安装 8.0.x / 10.0.x SDK，`-warnaserror` 构建与双 TFM 测试
+
+### 文档
+
+- README/DEVELOPMENT 同步严格配置、依赖/目标框架、IO 断路器按设备、管道指标口径
+- 评估报告标注为 v1.3.5 历史快照，当前行为以 README/DEVELOPMENT/CHANGELOG 为准
+
 ## [2.0.0] - 2026-11-03
 
 ### 新增
