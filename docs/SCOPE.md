@@ -56,12 +56,12 @@
 | IO 级按设备断路器 | ✅ |
 | 连接串值引号/转义（`;`、冒号、首尾空格、双写引号） | ✅ |
 | OPC UA `ITagBrowser` / `IDeviceBrowser` 标签浏览 | ✅ |
+| `ProtocolDriverBase<TClient>`：统一状态机/重连/`Faulted`/释放模板（S7/Omron/Mitsubishi/AB/BACnet/OPC UA） | ✅ |
 
 ## 仍要补齐的（按优先级）
 
 | 优先级 | 能力 | 原因 |
 |---|---|---|
-| P3 | 驱动基类（状态机/重连/Faulted 统一） | 降低语义漂移 |
 | P3 | XML 文档、覆盖率、format 门禁 | 发布质量 |
 
 ## 明确不放进库的

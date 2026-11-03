@@ -173,29 +173,53 @@ public sealed record MyDriverConfig
 
 `DataTypeMapper.TryResolve` 解析简写/IEC 别名/`System.*` 全名；未知类型返回 `false`，驱动应返回 `BadConfigError` 而不是回退 `int`。`Resolve` 仅用于兼容既有默认行为（空值 → `int`）。
 
-### 3. 实现 `IProtocolDriver`
+### 3. 实现 `ProtocolDriverBase<TClient>`（或 `IProtocolDriver`）
 
 ```csharp
 [ProtocolDriverName("MyProtocol")]
-public sealed class MyDriver(ILogger<MyDriver> logger, DeviceConfiguration device) : IProtocolDriver
+public sealed class MyDriver(ILogger<MyDriver> logger, DeviceConfiguration device)
+    : ProtocolDriverBase<MyClient>
 {
-    public DriverStatus DriverStatus { get; }
-    public Task ConnectAsync(CancellationToken ct = default);
-    public Task DisconnectAsync(CancellationToken ct = default);
-    public Task<bool> TryReconnectAsync(CancellationToken ct = default);
-    public Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default);
-    public Task<DriverResult[]> WriteAsync(IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default);
-    public ValueTask DisposeAsync();
+    public override async Task ConnectAsync(CancellationToken ct = default)
+    {
+        await DisconnectAsync(ct);
+        SetState(null, DriverStatus.Connecting);
+        var client = new MyClient(...);
+        await client.ConnectAsync(ct);
+        SetState(client, DriverStatus.Connected);
+    }
+
+    public override Task DisconnectAsync(CancellationToken ct = default)
+    {
+        var old = DetachClient();
+        old?.Dispose();
+        return Task.CompletedTask;
+    }
+
+    public override Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
+    {
+        var client = GetClientOrThrow("MyProtocol");
+        // ...
+    }
+
+    public override Task<DriverResult[]> WriteAsync(
+        IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
+    {
+        var client = GetClientOrThrow("MyProtocol");
+        // ...
+    }
 }
 ```
+
+基类统一：`DriverStatus`/状态锁、`GetClientOrThrow`、`DetachClient`、`SetState`、`MarkFaultedIfTransport`、`TryReconnectAsync`（失败返回 false + `Faulted`）、`DisposeAsync`（调用 Disconnect）。协议差异只留在 Connect/Disconnect/Read/Write。
 
 约定：
 
 - `ReadAsync` 结果数组与输入点位**一一对应**；单点失败用 `DriverResult.Bad`，不要抛异常
-- 传输级故障（socket/IO/超时）置 `DriverStatus.Faulted`（可用 `TransportFailureDetector.IsTransportFailure`），连接池据此丢弃重建
+- 传输级故障（socket/IO/超时）置 `DriverStatus.Faulted`（基类 `MarkFaultedIfTransport` 已封装），连接池据此丢弃重建
 - 传输异常可抛出，由池的 IO 级重试处理；业务/点位错误返回 Bad
-- `ConnectAsync` 失败置 `Faulted` 并抛出；`TryReconnectAsync` 返回 bool，不抛出（取消除外）
-- 释放所有 socket/客户端；`DisposeAsync` 先断开再释放
+- `ConnectAsync` 失败置 `Faulted` 并抛出；`TryReconnectAsync` 由基类统一，失败返回 false（取消除外）
+- 释放所有 socket/客户端；`DisposeAsync` 先断开再释放；需要额外释放/日志时覆写基类模板
 - 分页/批量读取时按组隔离错误；未支持的类型返回 `BadConfigError`
 - 可选实现 `ITagBrowser`（浏览直接子节点）；`DeviceDriverPool` 通过 `IDeviceBrowser` 统一借用/归还驱动
 

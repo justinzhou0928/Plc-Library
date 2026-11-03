@@ -17,19 +17,12 @@ using System.Threading.Tasks;
 namespace PlcLibrary.S7
 {
     [ProtocolDriverName("S7")]
-    public sealed class S7Driver(ILogger<S7Driver> logger, DeviceConfiguration device) : IProtocolDriver
+    public sealed class S7Driver(ILogger<S7Driver> logger, DeviceConfiguration device)
+        : ProtocolDriverBase<Plc>
     {
         private readonly S7DriverConfig _config = S7DriverConfig.Parse(device.ConnectionString);
-        private Plc? _plc;
-        private DriverStatus _status = DriverStatus.Disconnected;
-        private readonly object _stateLock = new();
 
-        public DriverStatus DriverStatus
-        {
-            get { lock (_stateLock) return _status; }
-        }
-
-        public async Task ConnectAsync(CancellationToken ct = default)
+        public override async Task ConnectAsync(CancellationToken ct = default)
         {
             await DisconnectAsync(ct).ConfigureAwait(false);
             SetState(null, DriverStatus.Connecting);
@@ -59,40 +52,21 @@ namespace PlcLibrary.S7
             }
         }
 
-        public Task DisconnectAsync(CancellationToken ct = default)
+        public override Task DisconnectAsync(CancellationToken ct = default)
         {
-            Plc? old;
-            lock (_stateLock)
-            {
-                old = _plc;
-                _plc = null;
-                _status = DriverStatus.Disconnected;
-            }
+            var old = DetachClient();
             try { old?.Close(); }
             catch { }
             return Task.CompletedTask;
         }
 
-        public async Task<bool> TryReconnectAsync(CancellationToken ct = default)
-        {
-            try
-            {
-                await DisconnectAsync(ct).ConfigureAwait(false);
-                await ConnectAsync(ct).ConfigureAwait(false);
-                S7Log.LogReconnected(logger, _config.Host);
-                return true;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                lock (_stateLock) _status = DriverStatus.Faulted;
-                S7Log.LogReconnectFailed(logger, ex, _config.Host);
-                return false;
-            }
-        }
+        protected override void OnReconnected() => S7Log.LogReconnected(logger, _config.Host);
 
-        public async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
+        protected override void OnReconnectFailed(Exception ex) => S7Log.LogReconnectFailed(logger, ex, _config.Host);
+
+        public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
-            var plc = GetPlcOrThrow();
+            var plc = GetClientOrThrow("S7");
             if (points.Length == 0) return [];
 
             var batchItems = new List<DataItem>(points.Length);
@@ -180,10 +154,10 @@ namespace PlcLibrary.S7
             return results;
         }
 
-        public async Task<DriverResult[]> WriteAsync(
+        public override async Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
-            var plc = GetPlcOrThrow();
+            var plc = GetClientOrThrow("S7");
             if (values.Count == 0) return [];
 
             var entries = values.ToList();
@@ -270,37 +244,6 @@ namespace PlcLibrary.S7
                 MarkFaultedIfTransport(ex);
                 results[index] = DriverResult.Bad(address, QualityCode.BadCommFailure, ex.Message);
             }
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            await DisconnectAsync().ConfigureAwait(false);
-        }
-
-        private void SetState(Plc? plc, DriverStatus status)
-        {
-            lock (_stateLock)
-            {
-                _plc = plc;
-                _status = status;
-            }
-        }
-
-        private Plc GetPlcOrThrow()
-        {
-            lock (_stateLock)
-            {
-                if (_plc is null || _status != DriverStatus.Connected)
-                    throw new InvalidOperationException("S7 driver is not connected");
-                return _plc;
-            }
-        }
-
-        /// <summary>通信级故障时置 Faulted，连接池据此丢弃驱动并重建，使断线重连生效。</summary>
-        private void MarkFaultedIfTransport(Exception ex)
-        {
-            if (TransportFailureDetector.IsTransportFailure(ex))
-                lock (_stateLock) _status = DriverStatus.Faulted;
         }
 
         // ─── S7 string 支持 ───

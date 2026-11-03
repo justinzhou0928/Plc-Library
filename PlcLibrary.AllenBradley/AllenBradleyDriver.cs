@@ -18,13 +18,10 @@ using System.Threading.Tasks;
 namespace PlcLibrary.AllenBradley
 {
     [ProtocolDriverName("AllenBradley")]
-    public sealed class AllenBradleyDriver : IProtocolDriver
+    public sealed class AllenBradleyDriver : ProtocolDriverBase<TagClient>
     {
         private readonly ILogger<AllenBradleyDriver> _logger;
         private readonly AllenBradleyDriverConfig _config;
-        private readonly object _stateLock = new();
-        private TagClient? _tagClient;
-        private DriverStatus _status = DriverStatus.Disconnected;
 
         private static readonly MethodInfo? ReadAsyncMethod = typeof(TagClient)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance)
@@ -42,12 +39,7 @@ namespace PlcLibrary.AllenBradley
             _config = AllenBradleyDriverConfig.Parse(device.ConnectionString);
         }
 
-        public DriverStatus DriverStatus
-        {
-            get { lock (_stateLock) return _status; }
-        }
-
-        public async Task ConnectAsync(CancellationToken ct = default)
+        public override async Task ConnectAsync(CancellationToken ct = default)
         {
             await DisconnectAsync(ct).ConfigureAwait(false);
             SetState(null, DriverStatus.Connecting);
@@ -76,15 +68,9 @@ namespace PlcLibrary.AllenBradley
             }
         }
 
-        public async Task DisconnectAsync(CancellationToken ct = default)
+        public override async Task DisconnectAsync(CancellationToken ct = default)
         {
-            TagClient? old;
-            lock (_stateLock)
-            {
-                old = _tagClient;
-                _tagClient = null;
-                _status = DriverStatus.Disconnected;
-            }
+            var old = DetachClient();
 
             if (old is not null)
             {
@@ -93,26 +79,19 @@ namespace PlcLibrary.AllenBradley
             }
         }
 
-        public async Task<bool> TryReconnectAsync(CancellationToken ct = default)
+        protected override void OnReconnected() => AllenBradleyLog.LogReconnected(_logger);
+
+        protected override void OnReconnectFailed(Exception ex) => AllenBradleyLog.LogReconnectFailed(_logger, ex);
+
+        public override async ValueTask DisposeAsync()
         {
-            try
-            {
-                await DisconnectAsync(ct).ConfigureAwait(false);
-                await ConnectAsync(ct).ConfigureAwait(false);
-                AllenBradleyLog.LogReconnected(_logger);
-                return true;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                lock (_stateLock) _status = DriverStatus.Faulted;
-                AllenBradleyLog.LogReconnectFailed(_logger, ex);
-                return false;
-            }
+            await base.DisposeAsync().ConfigureAwait(false);
+            AllenBradleyLog.LogDisposed(_logger);
         }
 
-        public async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
+        public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
-            var tagClient = GetClientOrThrow();
+            var tagClient = GetClientOrThrow("AllenBradley");
             if (points.Length == 0) return [];
 
             var results = new DriverResult[points.Length];
@@ -292,10 +271,10 @@ namespace PlcLibrary.AllenBradley
             }
         }
 
-        public async Task<DriverResult[]> WriteAsync(
+        public override async Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
-            var tagClient = GetClientOrThrow();
+            var tagClient = GetClientOrThrow("AllenBradley");
             if (values.Count == 0) return [];
 
             var entryList = values.ToList();
@@ -330,12 +309,6 @@ namespace PlcLibrary.AllenBradley
             return results;
         }
 
-        public async ValueTask DisposeAsync()
-        {
-            await DisconnectAsync().ConfigureAwait(false);
-            AllenBradleyLog.LogDisposed(_logger);
-        }
-
         private static async Task<object?> ReadTypedAsync(TagClient client, string tagName, Type type, CancellationToken ct)
         {
             if (type == typeof(string))
@@ -360,32 +333,6 @@ namespace PlcLibrary.AllenBradley
             var method = WriteAsyncMethod.MakeGenericMethod(type);
             var task = (Task)method.Invoke(client, [tagName, converted, ct])!;
             await task.ConfigureAwait(false);
-        }
-
-        private void SetState(TagClient? client, DriverStatus status)
-        {
-            lock (_stateLock)
-            {
-                _tagClient = client;
-                _status = status;
-            }
-        }
-
-        private TagClient GetClientOrThrow()
-        {
-            lock (_stateLock)
-            {
-                if (_tagClient is null || _status != DriverStatus.Connected)
-                    throw new InvalidOperationException("AllenBradley driver is not connected");
-                return _tagClient;
-            }
-        }
-
-        /// <summary>通信级故障时置 Faulted，连接池据此丢弃驱动并重建，使断线重连生效。</summary>
-        private void MarkFaultedIfTransport(Exception ex)
-        {
-            if (TransportFailureDetector.IsTransportFailure(ex))
-                lock (_stateLock) _status = DriverStatus.Faulted;
         }
     }
 }

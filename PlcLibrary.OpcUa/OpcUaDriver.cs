@@ -17,7 +17,7 @@ using System.Threading.Tasks;
 namespace PlcLibrary.OpcUa
 {
     [ProtocolDriverName("OPC_UA")]
-    public sealed class OpcUaDriver : IPushProtocolDriver, ITagBrowser
+    public sealed class OpcUaDriver : ProtocolDriverBase<Session>, IPushProtocolDriver, ITagBrowser
     {
         private const int KeepAliveIntervalSeconds = 30;
         private const uint SubscriptionKeepAliveCount = 10;
@@ -26,11 +26,8 @@ namespace PlcLibrary.OpcUa
 
         private readonly ILogger<OpcUaDriver> _logger;
         private readonly OpcUaDriverConfig _config;
-        private readonly object _stateLock = new();
-        private Session? _session;
         private IList<Subscription>? _subscriptions;
         private KeepAliveEventHandler? _keepAliveHandler;
-        private DriverStatus _status = DriverStatus.Disconnected;
         private int _disposed;
 
         public OpcUaDriver(ILogger<OpcUaDriver> logger, DeviceConfiguration device)
@@ -39,12 +36,7 @@ namespace PlcLibrary.OpcUa
             _config = OpcUaDriverConfig.Parse(device.ConnectionString);
         }
 
-        public DriverStatus DriverStatus
-        {
-            get { lock (_stateLock) return _status; }
-        }
-
-        public async Task ConnectAsync(CancellationToken ct = default)
+        public override async Task ConnectAsync(CancellationToken ct = default)
         {
             await DisconnectAsync(ct).ConfigureAwait(false);
             SetStatus(DriverStatus.Connecting);
@@ -101,11 +93,10 @@ namespace PlcLibrary.OpcUa
                 });
                 typedSession.KeepAlive += keepAliveHandler;
 
-                lock (_stateLock)
+                lock (StateLock)
                 {
-                    _session = typedSession;
                     _keepAliveHandler = keepAliveHandler;
-                    _status = DriverStatus.Connected;
+                    SetState(typedSession, DriverStatus.Connected);
                 }
                 OpcUaLog.LogConnected(_logger, _config.Endpoint);
             }
@@ -118,18 +109,16 @@ namespace PlcLibrary.OpcUa
             }
         }
 
-        public async Task DisconnectAsync(CancellationToken ct = default)
+        public override async Task DisconnectAsync(CancellationToken ct = default)
         {
             Session? session;
             KeepAliveEventHandler? keepAliveHandler;
-            lock (_stateLock)
+            lock (StateLock)
             {
                 _subscriptions = null;
                 keepAliveHandler = _keepAliveHandler;
                 _keepAliveHandler = null;
-                session = _session;
-                _session = null;
-                _status = DriverStatus.Disconnected;
+                session = DetachClient();
             }
 
             if (session is not null)
@@ -146,26 +135,13 @@ namespace PlcLibrary.OpcUa
             }
         }
 
-        public async Task<bool> TryReconnectAsync(CancellationToken ct = default)
-        {
-            try
-            {
-                await DisconnectAsync(ct).ConfigureAwait(false);
-                await ConnectAsync(ct).ConfigureAwait(false);
-                OpcUaLog.LogReconnected(_logger);
-                return true;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                SetStatus(DriverStatus.Faulted);
-                OpcUaLog.LogReconnectFailed(_logger, ex);
-                return false;
-            }
-        }
+        protected override void OnReconnected() => OpcUaLog.LogReconnected(_logger);
 
-        public async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
+        protected override void OnReconnectFailed(Exception ex) => OpcUaLog.LogReconnectFailed(_logger, ex);
+
+        public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
-            var session = GetSessionOrThrow();
+            var session = GetClientOrThrow("OPC UA");
             if (points.Length == 0) return [];
 
             var results = new DriverResult[points.Length];
@@ -215,10 +191,10 @@ namespace PlcLibrary.OpcUa
             return results;
         }
 
-        public async Task<DriverResult[]> WriteAsync(
+        public override async Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
-            var session = GetSessionOrThrow();
+            var session = GetClientOrThrow("OPC UA");
             if (values.Count == 0) return [];
 
             var entryList = values.ToList();
@@ -278,7 +254,7 @@ namespace PlcLibrary.OpcUa
         public async Task<IReadOnlyList<TagDescriptor>> BrowseAsync(
             string? address = null, CancellationToken ct = default)
         {
-            var session = GetSessionOrThrow();
+            var session = GetClientOrThrow("OPC UA");
 
             NodeId nodeId;
             try
@@ -384,7 +360,7 @@ namespace PlcLibrary.OpcUa
             Func<DriverResult, CancellationToken, ValueTask> onData,
             CancellationToken ct)
         {
-            var session = GetSessionOrThrow();
+            var session = GetClientOrThrow("OPC UA");
 
             var sub = CreateSubscription(_config);
 
@@ -466,7 +442,7 @@ namespace PlcLibrary.OpcUa
                 throw;
             }
 
-            lock (_stateLock) { _subscriptions = new[] { sub }; }
+            lock (StateLock) { _subscriptions = new[] { sub }; }
             OpcUaLog.LogSubscriptionStarted(_logger, vpCount, _config.PublishingInterval);
 
             try { await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false); }
@@ -477,11 +453,11 @@ namespace PlcLibrary.OpcUa
         {
             IList<Subscription>? subs;
             Session? session;
-            lock (_stateLock)
+            lock (StateLock)
             {
                 subs = _subscriptions;
                 _subscriptions = null;
-                session = _session;
+                session = Client;
             }
 
             if (subs is not null)
@@ -507,11 +483,11 @@ namespace PlcLibrary.OpcUa
             return Task.CompletedTask;
         }
 
-        public async ValueTask DisposeAsync()
+        public override async ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             await StopPushingAsync(default).ConfigureAwait(false);
-            await DisconnectAsync().ConfigureAwait(false);
+            await base.DisposeAsync().ConfigureAwait(false);
             OpcUaLog.LogDisposed(_logger);
         }
 
@@ -615,10 +591,10 @@ namespace PlcLibrary.OpcUa
             => value == DateTime.MinValue ? null : value;
 
         /// <summary>OPC UA 的服务级/传输级异常置 Faulted，使池按需重连。</summary>
-        private void MarkFaultedIfTransport(Exception ex)
+        protected override void MarkFaultedIfTransport(Exception ex)
         {
-            if (TransportFailureDetector.IsTransportFailure(ex)
-                || ex is ServiceResultException { StatusCode: var statusCode } && StatusCode.IsBad(statusCode))
+            base.MarkFaultedIfTransport(ex);
+            if (ex is ServiceResultException { StatusCode: var statusCode } && StatusCode.IsBad(statusCode))
             {
                 SetStatus(DriverStatus.Faulted);
             }
@@ -632,21 +608,6 @@ namespace PlcLibrary.OpcUa
                 "SIGNANDENCRYPT" => MessageSecurityMode.SignAndEncrypt,
                 _ => MessageSecurityMode.None
             };
-
-        private Session GetSessionOrThrow()
-        {
-            lock (_stateLock)
-            {
-                if (_session is null || _status != DriverStatus.Connected)
-                    throw new InvalidOperationException("OPC UA driver is not connected");
-                return _session;
-            }
-        }
-
-        private void SetStatus(DriverStatus status)
-        {
-            lock (_stateLock) { _status = status; }
-        }
 
         private static bool TryParseNodeId(string address, out NodeId nodeId)
         {

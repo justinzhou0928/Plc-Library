@@ -17,7 +17,7 @@ using System.Threading.Tasks;
 namespace PlcLibrary.Omron
 {
     [ProtocolDriverName("Omron_FINS")]
-    public sealed class OmronDriver : IProtocolDriver
+    public sealed class OmronDriver : ProtocolDriverBase<FinsClient>
     {
         /// <summary>单次 FINS 读请求的最大字数（协议上限 999，取保守值）。</summary>
         private const int MaxWordsPerRead = 480;
@@ -30,9 +30,6 @@ namespace PlcLibrary.Omron
 
         private readonly ILogger<OmronDriver> _logger;
         private readonly OmronDriverConfig _config;
-        private readonly object _stateLock = new();
-        private FinsClient? _finsClient;
-        private DriverStatus _status = DriverStatus.Disconnected;
 
         private static readonly Dictionary<Type, MethodInfo?> WriteMethods = BuildWriteMethods();
 
@@ -63,12 +60,7 @@ namespace PlcLibrary.Omron
             _config = OmronDriverConfig.Parse(device.ConnectionString);
         }
 
-        public DriverStatus DriverStatus
-        {
-            get { lock (_stateLock) return _status; }
-        }
-
-        public async Task ConnectAsync(CancellationToken ct = default)
+        public override async Task ConnectAsync(CancellationToken ct = default)
         {
             await DisconnectAsync(ct).ConfigureAwait(false);
             SetState(null, DriverStatus.Connecting);
@@ -105,15 +97,9 @@ namespace PlcLibrary.Omron
             }
         }
 
-        public Task DisconnectAsync(CancellationToken ct = default)
+        public override Task DisconnectAsync(CancellationToken ct = default)
         {
-            FinsClient? old;
-            lock (_stateLock)
-            {
-                old = _finsClient;
-                _finsClient = null;
-                _status = DriverStatus.Disconnected;
-            }
+            var old = DetachClient();
 
             if (old is not null)
             {
@@ -126,26 +112,19 @@ namespace PlcLibrary.Omron
             return Task.CompletedTask;
         }
 
-        public async Task<bool> TryReconnectAsync(CancellationToken ct = default)
+        protected override void OnReconnected() => OmronLog.LogReconnected(_logger);
+
+        protected override void OnReconnectFailed(Exception ex) => OmronLog.LogReconnectFailed(_logger, ex);
+
+        public override async ValueTask DisposeAsync()
         {
-            try
-            {
-                await DisconnectAsync(ct).ConfigureAwait(false);
-                await ConnectAsync(ct).ConfigureAwait(false);
-                OmronLog.LogReconnected(_logger);
-                return true;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                lock (_stateLock) _status = DriverStatus.Faulted;
-                OmronLog.LogReconnectFailed(_logger, ex);
-                return false;
-            }
+            await base.DisposeAsync().ConfigureAwait(false);
+            OmronLog.LogDisposed(_logger);
         }
 
-        public async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
+        public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
-            var client = GetClientOrThrow();
+            var client = GetClientOrThrow("Omron FINS");
             if (points.Length == 0) return [];
 
             var results = new DriverResult[points.Length];
@@ -208,10 +187,10 @@ namespace PlcLibrary.Omron
             return results;
         }
 
-        public async Task<DriverResult[]> WriteAsync(
+        public override async Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
-            var finsClient = GetClientOrThrow();
+            var finsClient = GetClientOrThrow("Omron FINS");
             if (values.Count == 0) return [];
 
             var entryList = values.ToList();
@@ -243,12 +222,6 @@ namespace PlcLibrary.Omron
             }
 
             return results;
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            await DisconnectAsync().ConfigureAwait(false);
-            OmronLog.LogDisposed(_logger);
         }
 
         /// <summary>按存储区把字访问点位合并为尽量少的连续区间（单次读请求覆盖多个点位）。</summary>
@@ -422,32 +395,6 @@ namespace PlcLibrary.Omron
             var converted = Convert.ChangeType(value, type);
             var task = (Task)method.Invoke(client, [address, converted])!;
             await task.ConfigureAwait(false);
-        }
-
-        private void SetState(FinsClient? client, DriverStatus status)
-        {
-            lock (_stateLock)
-            {
-                _finsClient = client;
-                _status = status;
-            }
-        }
-
-        private FinsClient GetClientOrThrow()
-        {
-            lock (_stateLock)
-            {
-                if (_finsClient is null || _status != DriverStatus.Connected)
-                    throw new InvalidOperationException("Omron FINS driver is not connected");
-                return _finsClient;
-            }
-        }
-
-        /// <summary>通信级故障时置 Faulted，连接池据此丢弃驱动并重建，使断线重连生效。</summary>
-        private void MarkFaultedIfTransport(Exception ex)
-        {
-            if (TransportFailureDetector.IsTransportFailure(ex))
-                lock (_stateLock) _status = DriverStatus.Faulted;
         }
 
         private sealed class ReadPlan(

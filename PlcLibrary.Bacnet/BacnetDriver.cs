@@ -16,14 +16,11 @@ using System.Threading.Tasks;
 namespace PlcLibrary.Bacnet
 {
     [ProtocolDriverName("BACnet")]
-    public sealed class BacnetDriver : IProtocolDriver
+    public sealed class BacnetDriver : ProtocolDriverBase<BacnetClient>
     {
         private readonly ILogger<BacnetDriver> _logger;
         private readonly BacnetDriverConfig _config;
-        private readonly object _stateLock = new();
-        private BacnetClient? _client;
         private BacnetAddress? _deviceAddress;
-        private DriverStatus _status = DriverStatus.Disconnected;
         private int _disposed;
 
         public BacnetDriver(ILogger<BacnetDriver> logger, DeviceConfiguration device)
@@ -32,12 +29,7 @@ namespace PlcLibrary.Bacnet
             _config = BacnetDriverConfig.Parse(device.ConnectionString);
         }
 
-        public DriverStatus DriverStatus
-        {
-            get { lock (_stateLock) return _status; }
-        }
-
-        public async Task ConnectAsync(CancellationToken ct = default)
+        public override async Task ConnectAsync(CancellationToken ct = default)
         {
             DisconnectInternal();
             SetState(null, DriverStatus.Connecting);
@@ -54,12 +46,9 @@ namespace PlcLibrary.Bacnet
 
                 var deviceAddress = await ResolveDeviceAddressAsync(client, ct).ConfigureAwait(false);
 
-                lock (_stateLock)
-                {
-                    _client = client;
-                    _deviceAddress = deviceAddress;
-                    _status = DriverStatus.Connected;
-                }
+                // 先写地址、再置 Connected；GetClientOrThrow 只在 Connected 时读取地址。
+                _deviceAddress = deviceAddress;
+                SetState(client, DriverStatus.Connected);
                 BacnetLog.LogConnected(_logger, _config.Host, _config.Port);
             }
             catch (OperationCanceledException) { throw; }
@@ -117,7 +106,7 @@ namespace PlcLibrary.Bacnet
             }
         }
 
-        public Task DisconnectAsync(CancellationToken ct = default)
+        public override Task DisconnectAsync(CancellationToken ct = default)
         {
             DisconnectInternal();
             return Task.CompletedTask;
@@ -125,14 +114,8 @@ namespace PlcLibrary.Bacnet
 
         private void DisconnectInternal()
         {
-            BacnetClient? oldClient;
-            lock (_stateLock)
-            {
-                oldClient = _client;
-                _client = null;
-                _deviceAddress = null;
-                _status = DriverStatus.Disconnected;
-            }
+            var oldClient = DetachClient();
+            _deviceAddress = null;
 
             if (oldClient is not null)
             {
@@ -140,26 +123,13 @@ namespace PlcLibrary.Bacnet
             }
         }
 
-        public async Task<bool> TryReconnectAsync(CancellationToken ct = default)
-        {
-            try
-            {
-                await DisconnectAsync(ct).ConfigureAwait(false);
-                await ConnectAsync(ct).ConfigureAwait(false);
-                BacnetLog.LogReconnected(_logger);
-                return true;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                lock (_stateLock) _status = DriverStatus.Faulted;
-                BacnetLog.LogReconnectFailed(_logger, ex);
-                return false;
-            }
-        }
+        protected override void OnReconnected() => BacnetLog.LogReconnected(_logger);
 
-        public async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
+        protected override void OnReconnectFailed(Exception ex) => BacnetLog.LogReconnectFailed(_logger, ex);
+
+        public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
-            var (client, deviceAddress) = GetClientOrThrow();
+            var (client, deviceAddress) = GetClientAndAddressOrThrow();
             if (points.Length == 0) return [];
 
             // 默认填充 Bad：厂商设备可能返回不完整的 RMP-ACK（省略某些对象），
@@ -237,10 +207,10 @@ namespace PlcLibrary.Bacnet
             return results;
         }
 
-        public async Task<DriverResult[]> WriteAsync(
+        public override async Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
-            var (client, deviceAddress) = GetClientOrThrow();
+            var (client, deviceAddress) = GetClientAndAddressOrThrow();
             if (values.Count == 0) return [];
 
             var entryList = values.ToList();
@@ -281,30 +251,19 @@ namespace PlcLibrary.Bacnet
             return results;
         }
 
-        public async ValueTask DisposeAsync()
+        public override async ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            await DisconnectAsync().ConfigureAwait(false);
+            await base.DisposeAsync().ConfigureAwait(false);
             BacnetLog.LogDisposed(_logger);
         }
 
-        private (BacnetClient client, BacnetAddress deviceAddress) GetClientOrThrow()
+        private (BacnetClient client, BacnetAddress deviceAddress) GetClientAndAddressOrThrow()
         {
-            lock (_stateLock)
-            {
-                if (_client is null || _deviceAddress is null || _status != DriverStatus.Connected)
-                    throw new InvalidOperationException("BACnet driver is not connected");
-                return (_client, _deviceAddress);
-            }
-        }
+            if (TryGetClient(out var client) && _deviceAddress is { } deviceAddress)
+                return (client, deviceAddress);
 
-        private void SetState(BacnetClient? client, DriverStatus status)
-        {
-            lock (_stateLock)
-            {
-                _client = client;
-                _status = status;
-            }
+            throw new InvalidOperationException("BACnet driver is not connected");
         }
 
         /// <summary>
@@ -340,13 +299,6 @@ namespace PlcLibrary.Bacnet
                 await action(token).ConfigureAwait(false);
                 return true;
             }, ct).ConfigureAwait(false);
-
-        /// <summary>通信级故障时置 Faulted，连接池据此丢弃驱动并重建，使断线重连生效。</summary>
-        private void MarkFaultedIfTransport(Exception ex)
-        {
-            if (TransportFailureDetector.IsTransportFailure(ex))
-                lock (_stateLock) _status = DriverStatus.Faulted;
-        }
 
         private static bool TryParseBacnetAddress(string address, out BacnetObjectTypes objType,
             out uint instance, out string error)

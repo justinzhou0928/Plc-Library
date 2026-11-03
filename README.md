@@ -508,6 +508,7 @@ rate(plc_pipeline_dropped_total[1m])
 | `IDataHandler` | 接收采集结果 |
 | `IDeviceAccessor` | 主动读写设备 |
 | `IProtocolDriver` | 协议驱动实现 |
+| `ProtocolDriverBase<TClient>` | 驱动状态机/重连/`Faulted`/释放基类 |
 | `IPushProtocolDriver` | 推送型驱动（订阅/回调） |
 | `ITagBrowser` | 可选驱动能力：浏览直接子节点（当前 OPC UA 实现） |
 | `IDeviceBrowser` | 设备级浏览访问器（连接池统一管理） |

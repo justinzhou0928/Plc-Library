@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Snet.Core;
 using Snet.Model.data;
 using Snet.Model.@enum;
@@ -22,7 +22,7 @@ using System.Threading.Tasks;
 namespace PlcLibrary.Mitsubishi
 {
     [ProtocolDriverName("Mitsubishi")]
-    public sealed class MitsubishiDriver : IProtocolDriver
+    public sealed class MitsubishiDriver : ProtocolDriverBase<MitsubishiOperate>
     {
         /// <summary>单次 MC 批量读的最大字数（3E 帧请求数据上限内，取保守值）。</summary>
         private const int MaxWordsPerRead = 480;
@@ -50,9 +50,6 @@ namespace PlcLibrary.Mitsubishi
 
         private readonly ILogger<MitsubishiDriver> _logger;
         private readonly MitsubishiDriverConfig _config;
-        private readonly object _stateLock = new();
-        private MitsubishiOperate? _operate;
-        private DriverStatus _status = DriverStatus.Disconnected;
 
         public MitsubishiDriver(ILogger<MitsubishiDriver> logger, DeviceConfiguration device)
         {
@@ -60,12 +57,7 @@ namespace PlcLibrary.Mitsubishi
             _config = MitsubishiDriverConfig.Parse(device.ConnectionString);
         }
 
-        public DriverStatus DriverStatus
-        {
-            get { lock (_stateLock) return _status; }
-        }
-
-        public async Task ConnectAsync(CancellationToken ct = default)
+        public override async Task ConnectAsync(CancellationToken ct = default)
         {
             await DisconnectAsync(ct).ConfigureAwait(false);
             SetState(null, DriverStatus.Connecting);
@@ -101,15 +93,9 @@ namespace PlcLibrary.Mitsubishi
             }
         }
 
-        public async Task DisconnectAsync(CancellationToken ct = default)
+        public override async Task DisconnectAsync(CancellationToken ct = default)
         {
-            MitsubishiOperate? old;
-            lock (_stateLock)
-            {
-                old = _operate;
-                _operate = null;
-                _status = DriverStatus.Disconnected;
-            }
+            var old = DetachClient();
 
             if (old is not null)
             {
@@ -120,26 +106,19 @@ namespace PlcLibrary.Mitsubishi
             }
         }
 
-        public async Task<bool> TryReconnectAsync(CancellationToken ct = default)
+        protected override void OnReconnected() => MitsubishiLog.LogReconnected(_logger);
+
+        protected override void OnReconnectFailed(Exception ex) => MitsubishiLog.LogReconnectFailed(_logger, ex);
+
+        public override async ValueTask DisposeAsync()
         {
-            try
-            {
-                await DisconnectAsync(ct).ConfigureAwait(false);
-                await ConnectAsync(ct).ConfigureAwait(false);
-                MitsubishiLog.LogReconnected(_logger);
-                return true;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                lock (_stateLock) _status = DriverStatus.Faulted;
-                MitsubishiLog.LogReconnectFailed(_logger, ex);
-                return false;
-            }
+            await base.DisposeAsync().ConfigureAwait(false);
+            MitsubishiLog.LogDisposed(_logger);
         }
 
-        public async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
+        public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
-            var operate = GetOperateOrThrow();
+            var operate = GetClientOrThrow("Mitsubishi");
             if (points.Length == 0) return [];
 
             var results = new DriverResult[points.Length];
@@ -157,10 +136,10 @@ namespace PlcLibrary.Mitsubishi
             return results;
         }
 
-        public async Task<DriverResult[]> WriteAsync(
+        public override async Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
-            var operate = GetOperateOrThrow();
+            var operate = GetClientOrThrow("Mitsubishi");
             if (values.Count == 0) return [];
 
             var entryList = values.ToList();
@@ -217,12 +196,6 @@ namespace PlcLibrary.Mitsubishi
             }
 
             return results;
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            await DisconnectAsync().ConfigureAwait(false);
-            MitsubishiLog.LogDisposed(_logger);
         }
 
         /// <summary>把点位解析成可合并的读计划；非法地址/类型在结果数组里直接标 BadConfigError。</summary>
@@ -609,32 +582,6 @@ namespace PlcLibrary.Mitsubishi
                         $"Unknown Mitsubishi protocol type '{_config.ProtocolType}'. Supported: MC / A1E / A3C / FX")
                 },
             };
-        }
-
-        private void SetState(MitsubishiOperate? operate, DriverStatus status)
-        {
-            lock (_stateLock)
-            {
-                _operate = operate;
-                _status = status;
-            }
-        }
-
-        private MitsubishiOperate GetOperateOrThrow()
-        {
-            lock (_stateLock)
-            {
-                if (_operate is null || _status != DriverStatus.Connected)
-                    throw new InvalidOperationException("Mitsubishi driver is not connected");
-                return _operate;
-            }
-        }
-
-        /// <summary>通信级故障时置 Faulted，连接池据此丢弃驱动并重建，使断线重连生效。</summary>
-        private void MarkFaultedIfTransport(Exception ex)
-        {
-            if (TransportFailureDetector.IsTransportFailure(ex))
-                lock (_stateLock) _status = DriverStatus.Faulted;
         }
 
         private sealed class ReadPoint(
