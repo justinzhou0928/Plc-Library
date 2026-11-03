@@ -25,6 +25,7 @@
 
 - **S7 标量 `DataType` 生效**：配置 `DBW`+`short`、`DBD`+`float` 等类型时按配置解码，不再按地址推断；未配置时保持原行为。依赖 `DBD` 恒为 `uint` 的调用方需检查点位配置；`long`/`ulong` 等无对应 S7.Net 标量 `VarType` 的类型返回 `BadConfigError`
 - **连接串未知键不再静默忽略**：未知键会抛 `InvalidOperationException`，并列出允许键；自定义驱动如使用非属性名键，需通过 `ConnectionStringBinder.Bind<T>(cs, "alias")` 显式声明
+- `IDeviceCollector` 改为 internal：它只由调度器创建/停止，没有公开注册或扩展点，避免实现细节泄漏到公共 API
 
 ### 文档
 
