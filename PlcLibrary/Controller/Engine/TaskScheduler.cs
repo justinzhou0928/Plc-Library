@@ -89,14 +89,37 @@ namespace PlcLibrary.Controller.Engine
                     ct.ThrowIfCancellationRequested();
                     if (!_actuators.TryGetValue(id, out _))
                     {
-                        await StartActuatorAsync(device, ct).ConfigureAwait(false);
+                        try
+                        {
+                            await StartActuatorAsync(device, ct).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            // 单个设备配置/驱动构造失败不能拖垮整次热更新。
+                            ControllerLog.LogCollectionFailed(_logger, ex, id);
+                            await StopActuatorAsync(id).ConfigureAwait(false);
+                            continue;
+                        }
+
                         if (Volatile.Read(ref _stopping) != 0)
                             await StopActuatorAsync(id).ConfigureAwait(false);
                     }
                     else if (_activeConfigs.TryGetValue(id, out var old) && HasSignificantChange(old, device))
                     {
                         await StopActuatorAsync(id).ConfigureAwait(false);
-                        await StartActuatorAsync(device, ct).ConfigureAwait(false);
+                        try
+                        {
+                            await StartActuatorAsync(device, ct).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            ControllerLog.LogCollectionFailed(_logger, ex, id);
+                            await StopActuatorAsync(id).ConfigureAwait(false);
+                            continue;
+                        }
+
                         if (Volatile.Read(ref _stopping) != 0)
                             await StopActuatorAsync(id).ConfigureAwait(false);
                     }
@@ -234,6 +257,11 @@ namespace PlcLibrary.Controller.Engine
         {
             var factory = _factories[device.Protocol];
 
+            // 轮询驱动由连接池在首次读取时创建；这里先构造/释放一次，让连接串解析错误
+            // 在 Apply 阶段暴露（而不是每个采集周期重复记录日志）。
+            if (!factory.SupportsPush)
+                await ValidateDriverConfigurationAsync(factory, device, ct).ConfigureAwait(false);
+
             var collector = factory.SupportsPush
                 ? await CreatePushCollectorAsync(factory, device, ct).ConfigureAwait(false)
                 : CreatePollingCollector(device);
@@ -243,6 +271,14 @@ namespace PlcLibrary.Controller.Engine
             _activeConfigs[device.Id] = device;
             await actuator.StartAsync().ConfigureAwait(false);
             ControllerLog.LogTaskStarted(_logger, device.Id, device.Protocol, device.CollectionInterval);
+        }
+
+        private static async Task ValidateDriverConfigurationAsync(
+            IDriverFactory factory, DeviceConfiguration device, CancellationToken ct)
+        {
+            var probe = await factory.CreateAsync(device, ct).ConfigureAwait(false);
+            try { await probe.DisposeAsync().ConfigureAwait(false); }
+            catch { }
         }
 
         private async Task<IDeviceCollector> CreatePushCollectorAsync(

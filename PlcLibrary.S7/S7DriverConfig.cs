@@ -15,7 +15,7 @@ namespace PlcLibrary.S7
 
         public static S7DriverConfig Parse(string connectionString)
         {
-            var config = ConnectionStringBinder.Bind<S7DriverConfig>(connectionString);
+            var config = ConnectionStringBinder.Bind<S7DriverConfig>(connectionString, "cpu");
             var dict = KeyValueConnectionString.Parse(connectionString);
             if (dict.TryGetValue("cpu", out var cpu) && Enum.TryParse<CpuType>(cpu, true, out var cpuType))
                 config = config with { CpuType = cpuType };

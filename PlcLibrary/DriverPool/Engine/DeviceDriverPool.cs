@@ -6,6 +6,7 @@ using PlcLibrary.DriverPool.Models;
 using PlcLibrary.General;
 using PlcLibrary.General.Configuration;
 using Polly;
+using Polly.CircuitBreaker;
 using Polly.Retry;
 using Polly.Timeout;
 using System;
@@ -28,9 +29,9 @@ namespace PlcLibrary.DriverPool.Engine
 
         private readonly IReadOnlyDictionary<string, IDriverFactory> _factoriesByProtocol;
         private readonly ConcurrentDictionary<string, Lazy<DeviceSharedPool>> _pools = new();
+        private readonly ConcurrentDictionary<string, ResiliencePipeline> _ioPipelines = new();
         private readonly PoolOptions _options;
         private readonly ILoggerFactory _loggerFactory;
-        private readonly ResiliencePipeline _ioResilience;
         private readonly CancellationTokenSource? _cleanupCts;
         private readonly Task? _cleanupTask;
         private int _disposed;
@@ -46,17 +47,6 @@ namespace PlcLibrary.DriverPool.Engine
             _factoriesByProtocol = factories.ToDictionary(f => f.ProtocolDriverName);
             _options = options.Value;
             _loggerFactory = loggerFactory;
-            _ioResilience = new ResiliencePipelineBuilder()
-                .AddRetry(new RetryStrategyOptions
-                {
-                    MaxRetryAttempts = _options.MaxRetryAttempts,
-                    BackoffType = DelayBackoffType.Exponential,
-                    Delay = _options.RetryDelay,
-                    ShouldHandle = new PredicateBuilder()
-                        .Handle<Exception>(ex => ex is not OperationCanceledException and not TimeoutRejectedException),
-                })
-                .AddTimeout(_options.OperationTimeout)
-                .Build();
 
             // 空置池自动回收：长期热更新增删设备不泄漏连接与弹性管线
             if (_options.PoolIdleTimeout > TimeSpan.Zero)
@@ -79,7 +69,7 @@ namespace PlcLibrary.DriverPool.Engine
             try
             {
                 var sw = Stopwatch.StartNew();
-                var results = await _ioResilience.ExecuteAsync(
+                var results = await GetIoPipeline(device).ExecuteAsync(
                         async token => await driver.ReadAsync(points, token).ConfigureAwait(false), ct)
                     .AsTask()
                     .WaitAsync(HardTimeout, ct)
@@ -138,7 +128,7 @@ namespace PlcLibrary.DriverPool.Engine
             var discard = false;
             try
             {
-                var results = await _ioResilience.ExecuteAsync(
+                var results = await GetIoPipeline(device).ExecuteAsync(
                         async token => await driver.WriteAsync(values, token).ConfigureAwait(false), ct)
                     .AsTask()
                     .WaitAsync(HardTimeout, ct)
@@ -170,6 +160,50 @@ namespace PlcLibrary.DriverPool.Engine
         }
 
         private TimeSpan HardTimeout => _options.OperationTimeout + HardTimeoutGrace;
+
+        private ResiliencePipeline GetIoPipeline(DeviceConfiguration device)
+            => _ioPipelines.GetOrAdd(PoolKey(device), _ => BuildIoPipeline(device));
+
+        private ResiliencePipeline BuildIoPipeline(DeviceConfiguration device)
+        {
+            var logger = _loggerFactory.CreateLogger("DeviceIO");
+            return new ResiliencePipelineBuilder()
+                // 断路器在最外层：统计“重试后仍失败”的最终结果；坏设备快速失败，
+                // 避免每个采集周期都重试到超时。超时也计入失败，便于隔离慢设备。
+                .AddCircuitBreaker(new CircuitBreakerStrategyOptions
+                {
+                    FailureRatio = _options.CircuitBreakerFailureRatio,
+                    MinimumThroughput = _options.CircuitBreakerMinimumThroughput,
+                    BreakDuration = _options.CircuitBreakerDuration,
+                    ShouldHandle = new PredicateBuilder()
+                        .Handle<Exception>(ex => ex is not OperationCanceledException),
+                    OnOpened = _ =>
+                    {
+                        PoolLog.LogCircuitBreakerOpened(logger, device.Id, _options.CircuitBreakerDuration);
+                        return default;
+                    },
+                    OnHalfOpened = _ =>
+                    {
+                        PoolLog.LogCircuitBreakerHalfOpened(logger, device.Id);
+                        return default;
+                    },
+                    OnClosed = _ =>
+                    {
+                        PoolLog.LogCircuitBreakerClosed(logger, device.Id);
+                        return default;
+                    },
+                })
+                .AddRetry(new RetryStrategyOptions
+                {
+                    MaxRetryAttempts = _options.MaxRetryAttempts,
+                    BackoffType = DelayBackoffType.Exponential,
+                    Delay = _options.RetryDelay,
+                    ShouldHandle = new PredicateBuilder()
+                        .Handle<Exception>(ex => ex is not OperationCanceledException and not TimeoutRejectedException),
+                })
+                .AddTimeout(_options.OperationTimeout)
+                .Build();
+        }
 
         public async ValueTask<IProtocolDriver> AcquireAsync(DeviceConfiguration device, CancellationToken ct = default)
         {
@@ -230,6 +264,7 @@ namespace PlcLibrary.DriverPool.Engine
                     await lazy.Value.DisposeAsync().ConfigureAwait(false);
             }
             _pools.Clear();
+            _ioPipelines.Clear();
         }
 
         private async Task CleanupLoopAsync(CancellationToken ct)
@@ -265,6 +300,7 @@ namespace PlcLibrary.DriverPool.Engine
 
                 if (_pools.TryRemove(key, out _))
                 {
+                    _ioPipelines.TryRemove(key, out _);
                     await pool.DisposeAsync().ConfigureAwait(false);
                     PoolLog.LogPoolRecycled(_loggerFactory.CreateLogger<DeviceDriverPool>(), pool.Device.Id);
                 }

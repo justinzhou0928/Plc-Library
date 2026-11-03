@@ -167,7 +167,7 @@ public sealed record MyDriverConfig
 }
 ```
 
-> 绑定器忽略未知键；配置拼写错误会静默使用默认值（见「已知限制」）。
+> 绑定器默认校验未知键：键名必须是配置类型的公开属性名，或驱动显式声明的别名（如 S7 `cpu`）；拼写错误在构造驱动配置时直接抛出。
 
 ### 2. 数据类型
 
@@ -221,9 +221,9 @@ services.AddPlcLibrary().AddDriver<MyDriver>();
 | 级别 | 作用域 | 策略 | 位置 |
 |---|---|---|---|
 | 连接级 | `ConnectAsync`/`TryReconnectAsync` | 重试 + 超时 + 断路器（每池） | `DeviceSharedPool` |
-| IO 级 | `ReadAsync`/`WriteAsync` | 重试 + 超时（进程级） | `DeviceDriverPool` |
+| IO 级 | `ReadAsync`/`WriteAsync` | 重试 + 超时 + 断路器（每设备） | `DeviceDriverPool` |
 
-- IO 级只对抛出的异常重试；Bad 结果不触发
+- IO 级只对抛出的异常重试；Bad 结果不触发。IO 断路器按设备键独立统计“重试后仍失败”的最终结果，超时也计入失败
 - 驱动应把配置的 `timeout` 应用到单次操作：AB 用链接 CTS 包住每次调用；Modbus TCP 用于连接建立与收发；S7/OPC UA 传给底层客户端
 - `DeviceConfiguration.ConnectionTimeout` 是**池借用超时**，不是协议连接超时
 
@@ -303,8 +303,6 @@ OPC UA 测试包 `OPCFoundation.NetStandard.Opc.Ua.Server` 为 **test-only**，�
 | 项 | 现状 | 影响 |
 |---|---|---|
 | Mitsubishi 批量写 | 底层只返回整体结果 | 部分点失败时整批 Bad，重试需谨慎（非幂等） |
-| 连接串未知键 | 绑定器忽略未知键 | 拼写错误静默使用默认值 |
-| IO 级无熔断 | 坏设备每周期仍重试（指数退避） | 影响采集周期 |
 | 连接串值含 `;` | 解析按 `;` 切分 | 密码含分号会截断 |
 | handler 同步阻塞 | `HandleAsync` 在返回 `ValueTask` 之前同步阻塞仍会占住管道消费者；`EnqueueTimeout` 只保护采集侧不挂起 | 这种 handler 应改为异步；否则数据会被丢弃而不是被处理 |
 | 驱动 Dispose/Disconnect 不响应 | 池等待有界（连接 5s、归还后台），超时后放弃等待 | 底层 socket 可能仍由运行库持有，直到其自身超时 |

@@ -3,7 +3,7 @@
 工业 PLC 数据采集库：连接池、热更新调度、数据管道、实时值监控与可观测性，一个宿主进程接入多种协议。
 
 - 协议无关驱动接口：新增协议只需实现 `IProtocolDriver` + `AddDriver<T>()`
-- 连接池 + Polly 弹性策略（连接级重试/超时/熔断；IO 级重试/超时）
+- 连接池 + Polly 弹性策略（连接级重试/超时/熔断；IO 级重试/超时/熔断）
 - 设备配置热更新，差量 reconcile；推送型设备失败自动重建
 - Channel 管道 fan-out 到多个 `IDataHandler`，支持背压与 handler 超时
 - 主动读写 + 自动采集双模式；`PlcLibrary.Monitor` 提供变化订阅缓存
@@ -181,7 +181,7 @@ internal sealed class DeviceLoader(IConfiguration config, IDeviceScheduler sched
 
 ### 连接字符串
 
-格式 `key:value;key:value`，大小写不敏感。未知键会被忽略（拼写错误不会报错，需自行核对）。
+格式 `key:value;key:value`，大小写不敏感。**未知键会在构造驱动配置时抛 `InvalidOperationException`**，并在错误信息中列出未知键和允许键；不再静默使用默认值。驱动如支持特殊别名（例如 S7 的 `cpu`），会在解析器中显式声明。
 
 #### S7
 
@@ -398,9 +398,9 @@ OPC UA 驱动实现 `IPushProtocolDriver`：`ApplyDevicesAsync` 后建立订阅�
 | 级别 | 作用域 | 策略 | 触发位置 |
 |---|---|---|---|
 | 连接级 | `ConnectAsync` / `TryReconnectAsync` | 重试 + 超时 + 断路器（每池独立） | `DeviceSharedPool.AcquireAsync` |
-| IO 级 | `ReadAsync` / `WriteAsync` | 重试 + 超时（进程级共享） | `DeviceDriverPool.ReadAsync/WriteAsync` |
+| IO 级 | `ReadAsync` / `WriteAsync` | 重试 + 超时 + 断路器（每设备独立） | `DeviceDriverPool.ReadAsync/WriteAsync` |
 
-- 连接级断路器默认 5 次、失败率 ≥50%、冷却 30s；状态变更走 `ILogger`
+- 连接级断路器默认 5 次、失败率 ≥50%、冷却 30s；IO 级按设备独立使用相同参数；状态变更走 `ILogger`
 - 驱动捕获传输级故障时置 `Faulted`，池归还时丢弃并按需重建
 - 推送驱动失败由调度器监督循环按指数退避重建（5s 扫描，最长 60s 退避）
 - **卡死看门狗**：轮询采集超过 `max(4 × 采集周期, 30s)` 无进展、推送采集心跳循环停止时，监督循环会停止并按退避重建执行器；健康状态返回 `Faulted`。推送订阅存活期间即使没有值变化，也会按 30s 周期刷新心跳

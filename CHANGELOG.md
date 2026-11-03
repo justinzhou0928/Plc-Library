@@ -14,11 +14,14 @@
 - **推送采集看门狗误判**：`PushCollector` 在订阅存活但值长期不变时不再因“5 分钟无数据”被重建；改为 30s 健康检查刷新心跳，并在驱动 `Faulted`/`Disconnected` 时主动结束、交由监督循环重建
 - **共享池键**：`DeviceDriverPool` 的连接池键纳入 `ConnectionTimeout`，同连接串但借用超时不同的设备不再共用按首设备创建的池
 - **BACnet 读写超时**：`timeout` 不再只用于 WhoIs；ReadPropertyMultiple/WriteProperty 均套时间上限，慢设备/不响应会置 `Faulted` 而不是长时间挂起
+- **连接串未知键静默忽略**：`ConnectionStringBinder` 现在校验键名（配置类型公开属性 + 显式别名），拼写错误在构造驱动配置时抛出并列出允许键
+- **IO 级无断路器**：`ReadAsync`/`WriteAsync` 增加按设备独立的断路器，坏设备在连续失败后快速失败，不再每周期重试到超时
 - **OPC UA 推送非法地址**：`StartPushingAsync` 对非法 `NodeId` 产出 `BadConfigError`，不再只写日志后静默丢弃
 
 ### 变更（不兼容）
 
 - **S7 标量 `DataType` 生效**：配置 `DBW`+`short`、`DBD`+`float` 等类型时按配置解码，不再按地址推断；未配置时保持原行为。依赖 `DBD` 恒为 `uint` 的调用方需检查点位配置；`long`/`ulong` 等无对应 S7.Net 标量 `VarType` 的类型返回 `BadConfigError`
+- **连接串未知键不再静默忽略**：未知键会抛 `InvalidOperationException`，并列出允许键；自定义驱动如使用非属性名键，需通过 `ConnectionStringBinder.Bind<T>(cs, "alias")` 显式声明
 
 ### 文档
 

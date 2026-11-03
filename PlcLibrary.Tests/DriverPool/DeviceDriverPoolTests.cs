@@ -8,6 +8,7 @@ using PlcLibrary.DriverDomain.Models;
 using PlcLibrary.DriverPool.Engine;
 using PlcLibrary.DriverPool.Models;
 using PlcLibrary.General.Configuration;
+using Polly.CircuitBreaker;
 using Polly.Timeout;
 
 namespace PlcLibrary.Tests.DriverPool;
@@ -198,6 +199,51 @@ public class DeviceDriverPoolTests
             () => pool.ReadAsync(_device, _device.TagPoints, CancellationToken.None));
 
         driver.Verify(d => d.DisconnectAsync(It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task ReadAsync_RepeatedTransportFailures_OpenCircuitAndFailFast()
+    {
+        var reads = 0;
+        var driver = new Mock<IProtocolDriver>();
+        driver.Setup(d => d.DriverStatus).Returns(DriverStatus.Connected);
+        driver.Setup(d => d.ReadAsync(It.IsAny<TagPointConfiguration[]>(), It.IsAny<CancellationToken>()))
+            .Returns(async () =>
+            {
+                Interlocked.Increment(ref reads);
+                await Task.Yield();
+                throw new IOException("simulated transport failure");
+            });
+        _factory.Setup(f => f.CreateAsync(It.IsAny<DeviceConfiguration>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(driver.Object);
+
+        var options = new Mock<IOptions<PoolOptions>>();
+        options.Setup(o => o.Value).Returns(new PoolOptions
+        {
+            MaxConnectionsPerDevice = 1,
+            MaxRetryAttempts = 1,
+            RetryDelay = TimeSpan.FromMilliseconds(100),
+            OperationTimeout = TimeSpan.FromSeconds(1),
+            CircuitBreakerMinimumThroughput = 2,
+            CircuitBreakerFailureRatio = 0.5,
+            CircuitBreakerDuration = TimeSpan.FromSeconds(5),
+            PoolIdleTimeout = TimeSpan.Zero,
+        });
+        var pool = new DeviceDriverPool(options.Object, [_factory.Object], NullLoggerFactory.Instance);
+
+        await Assert.ThrowsAsync<IOException>(() => pool.ReadAsync(_device, _device.TagPoints, CancellationToken.None));
+        await Assert.ThrowsAsync<IOException>(() => pool.ReadAsync(_device, _device.TagPoints, CancellationToken.None));
+
+        var before = Volatile.Read(ref reads);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await Assert.ThrowsAsync<BrokenCircuitException>(
+            () => pool.ReadAsync(_device, _device.TagPoints, CancellationToken.None));
+        sw.Stop();
+
+        // 熔断打开后不再触达驱动，快速失败；避免坏设备每周期重试拖长采集。
+        Assert.Equal(before, Volatile.Read(ref reads));
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(1), $"熔断未快速失败: {sw.Elapsed}");
+        await pool.DisposeAsync();
     }
 
     [Fact]
