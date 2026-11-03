@@ -8,6 +8,7 @@
 
 - `DriverResult.SourceTimestamp` / `DriverResult.ServerTimestamp`：透传协议返回的设备侧/服务器侧时间戳；OPC UA 读与订阅填充，其他协议保持 `null`，`Timestamp` 仍为库采集时间
 - 指标 `plc.points.bad`（按 `device.id`/`quality`）、`plc.reconnects`、`plc.reconnect.failures`，补齐 Bad 质量与重连可观测性
+- 标签浏览：可选驱动接口 `ITagBrowser` + 设备访问器 `IDeviceBrowser`，`OpcUaDriver` 支持浏览 Objects 文件夹/指定 NodeId 的直接子节点，返回 `TagDescriptor`（地址/名称/类型/可写/是否文件夹）
 
 ### 修复
 

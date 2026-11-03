@@ -291,7 +291,7 @@ new TagPointConfiguration
 
 示例：`endpoint:opc.tcp://10.0.0.1:4840;security:None;timeout:10000`
 
-OPC UA 驱动实现 `IPushProtocolDriver`：`ApplyDevicesAsync` 后建立订阅并持续推送，`CollectionInterval` 无效。`Address` 为 `NodeId` 字符串（`ns=2;s=Tag`、`ns=2;i=1234`）；`DataType` 可选，服务端返回类型透传。
+OPC UA 驱动实现 `IPushProtocolDriver`：`ApplyDevicesAsync` 后建立订阅并持续推送，`CollectionInterval` 无效。`Address` 为 `NodeId` 字符串（`ns=2;s=Tag`、`ns=2;i=1234`）；`DataType` 可选，服务端返回类型透传。驱动同时实现 `ITagBrowser`，可通过 `IDeviceBrowser` 浏览 Objects 文件夹或指定 NodeId 的直接子节点。
 
 > 连接前会校验三项证书存储（应用/对端/颁发者）；即使 `security:None` + 匿名，`pkiissuerpath` 也不能为空，否则连接阶段直接抛 `BadConfigurationError`。四个 PKI 目录需对运行账户可读写；相对路径基于进程工作目录。
 
@@ -481,7 +481,7 @@ Meter `PlcLibrary`，读/写/获取指标带 `device.id`、`device.protocol`，�
 | `plc.pipeline.dispatched` | Counter\<long\> | 管道分发点数 |
 | `plc.pipeline.dropped` | Counter\<long\> | 管道写入队列超时丢弃点数（订阅通道 `DropOldest` 不做逐点计数） |
 
-`ActivitySource("PlcLibrary")` 的 Span：`PlcLibrary.ReadAsync`、`PlcLibrary.WriteAsync`、`PlcLibrary.Acquire`、`PlcLibrary.Dispatch`（标签见 DEVELOPMENT）。
+`ActivitySource("PlcLibrary")` 的 Span：`PlcLibrary.ReadAsync`、`PlcLibrary.WriteAsync`、`PlcLibrary.Acquire`、`PlcLibrary.BrowseAsync`、`PlcLibrary.Dispatch`（标签见 DEVELOPMENT）。
 
 ```csharp
 builder.Services.AddOpenTelemetry()
@@ -509,6 +509,8 @@ rate(plc_pipeline_dropped_total[1m])
 | `IDeviceAccessor` | 主动读写设备 |
 | `IProtocolDriver` | 协议驱动实现 |
 | `IPushProtocolDriver` | 推送型驱动（订阅/回调） |
+| `ITagBrowser` | 可选驱动能力：浏览直接子节点（当前 OPC UA 实现） |
+| `IDeviceBrowser` | 设备级浏览访问器（连接池统一管理） |
 | `IDriverFactory` | 驱动工厂（通常由 `AddDriver<T>` 生成） |
 | `IDataPipeline` | 数据管道（一般无需直接使用） |
 | `IPlcMonitor` | 实时值缓存与变化订阅（Monitor 包） |
@@ -540,6 +542,26 @@ public class MyService(IDeviceAccessor accessor)
     }
 }
 ```
+
+### 标签浏览
+
+```csharp
+public class TagDiscovery(IDeviceBrowser browser)
+{
+    public async Task WalkAsync(DeviceConfiguration device, CancellationToken ct)
+    {
+        var nodes = await browser.BrowseAsync(device, null, ct); // OPC UA Objects 文件夹
+        foreach (var node in nodes)
+        {
+            Console.WriteLine($"{node.Address} {node.Name} type={node.DataType} writable={node.IsWritable}");
+            if (node.IsFolder)
+                await browser.BrowseAsync(device, node.Address, ct); // 只取直接子节点，递归由上层控制
+        }
+    }
+}
+```
+
+`ITagBrowser` 是可选驱动能力，当前由 `OpcUaDriver` 实现；`IDeviceBrowser` 通过连接池借用/归还驱动。不支持浏览的协议抛 `NotSupportedException`。`TagDescriptor` 包含 `Address/Name/DataType/IsWritable/IsFolder/Description`；`DataType` 为协议内置类型名（如 OPC UA `Boolean`/`DateTime`），未知时为 `null`。
 
 ### 健康状态
 

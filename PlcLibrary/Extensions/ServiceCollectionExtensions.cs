@@ -40,7 +40,10 @@ namespace PlcLibrary.Extensions
 
         private static IServiceCollection AddPlcLibraryCore(this IServiceCollection services)
         {
-            services.AddSingleton<IDeviceAccessor, DeviceDriverPool>();
+            // 单一实例实现多个接口：池既提供读写，也提供标签浏览。
+            services.AddSingleton<DeviceDriverPool>();
+            services.AddSingleton<IDeviceAccessor>(sp => sp.GetRequiredService<DeviceDriverPool>());
+            services.AddSingleton<IDeviceBrowser>(sp => sp.GetRequiredService<DeviceDriverPool>());
 
             services.AddSingleton<DriverResultPipeline>();
             services.AddSingleton<IDataPipeline>(sp => sp.GetRequiredService<DriverResultPipeline>());

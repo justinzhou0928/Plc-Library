@@ -197,6 +197,7 @@ public sealed class MyDriver(ILogger<MyDriver> logger, DeviceConfiguration devic
 - `ConnectAsync` 失败置 `Faulted` 并抛出；`TryReconnectAsync` 返回 bool，不抛出（取消除外）
 - 释放所有 socket/客户端；`DisposeAsync` 先断开再释放
 - 分页/批量读取时按组隔离错误；未支持的类型返回 `BadConfigError`
+- 可选实现 `ITagBrowser`（浏览直接子节点）；`DeviceDriverPool` 通过 `IDeviceBrowser` 统一借用/归还驱动
 
 ### 4. 注册
 
@@ -234,6 +235,7 @@ services.AddPlcLibrary().AddDriver<MyDriver>();
 | `PlcLibrary.ReadAsync` | `DeviceDriverPool.ReadAsync` | device.id/device.protocol/point.count |
 | `PlcLibrary.WriteAsync` | `DeviceDriverPool.WriteAsync` | device.id/device.protocol/point.count |
 | `PlcLibrary.Acquire` | `DeviceSharedPool.AcquireAsync` | device.id/device.protocol |
+| `PlcLibrary.BrowseAsync` | `DeviceDriverPool.BrowseAsync` | device.id/device.protocol |
 | `PlcLibrary.Dispatch` | `DriverResultPipeline.DispatchAsync` | device.id/tag.id/status |
 
 指标清单与 PromQL 示例见 [README](./README.md#可观测性)；埋点原则：

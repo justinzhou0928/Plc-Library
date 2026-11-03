@@ -20,7 +20,7 @@ using System.Threading.Tasks;
 
 namespace PlcLibrary.DriverPool.Engine
 {
-    internal sealed class DeviceDriverPool : IDeviceAccessor, IAsyncDisposable
+    internal sealed class DeviceDriverPool : IDeviceAccessor, IDeviceBrowser, IAsyncDisposable
     {
         private static readonly TimeSpan DisconnectTimeout = TimeSpan.FromSeconds(2);
 
@@ -157,6 +157,49 @@ namespace PlcLibrary.DriverPool.Engine
                 throw;
             }
             finally { Return(driver, device, discard); }
+        }
+
+        public async Task<IReadOnlyList<TagDescriptor>> BrowseAsync(
+            DeviceConfiguration device, string? address = null, CancellationToken ct = default)
+        {
+            using var activity = PlcActivity.Source.StartActivity("PlcLibrary.BrowseAsync");
+            activity?.SetTag("device.id", device.Id);
+            activity?.SetTag("device.protocol", device.Protocol);
+
+            var driver = await AcquireAsync(device, ct).ConfigureAwait(false);
+            var discard = false;
+            try
+            {
+                if (driver is not ITagBrowser browser)
+                    throw new NotSupportedException(
+                        $"Protocol '{device.Protocol}' does not support tag browsing.");
+
+                return await GetIoPipeline(device).ExecuteAsync(
+                        async token => await browser.BrowseAsync(address, token).ConfigureAwait(false), ct)
+                    .AsTask()
+                    .WaitAsync(HardTimeout, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                discard = ct.IsCancellationRequested;
+                throw;
+            }
+            catch (TimeoutRejectedException)
+            {
+                discard = true;
+                await TryDisconnectAsync(driver).ConfigureAwait(false);
+                throw;
+            }
+            catch (TimeoutException)
+            {
+                discard = true;
+                throw;
+            }
+            finally
+            {
+                Return(driver, device, discard);
+            }
         }
 
         private TimeSpan HardTimeout => _options.OperationTimeout + HardTimeoutGrace;

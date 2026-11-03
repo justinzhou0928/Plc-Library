@@ -17,7 +17,7 @@ using System.Threading.Tasks;
 namespace PlcLibrary.OpcUa
 {
     [ProtocolDriverName("OPC_UA")]
-    public sealed class OpcUaDriver : IPushProtocolDriver
+    public sealed class OpcUaDriver : IPushProtocolDriver, ITagBrowser
     {
         private const int KeepAliveIntervalSeconds = 30;
         private const uint SubscriptionKeepAliveCount = 10;
@@ -269,6 +269,114 @@ namespace PlcLibrary.OpcUa
             }
 
             return results;
+        }
+
+        /// <summary>
+        /// 浏览指定节点（null/空 = Objects 文件夹）的直接子节点。返回的 <see cref="TagDescriptor.Address"/>
+        /// 可直接用于点位，也可继续传入本方法递归浏览。
+        /// </summary>
+        public async Task<IReadOnlyList<TagDescriptor>> BrowseAsync(
+            string? address = null, CancellationToken ct = default)
+        {
+            var session = GetSessionOrThrow();
+
+            NodeId nodeId;
+            try
+            {
+                nodeId = string.IsNullOrWhiteSpace(address)
+                    ? ObjectIds.ObjectsFolder
+                    : NodeId.Parse(address);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Invalid OPC UA browse address '{address}'.", ex);
+            }
+
+            var options = new BrowserOptions
+            {
+                BrowseDirection = BrowseDirection.Forward,
+                ReferenceTypeId = ReferenceTypeIds.HierarchicalReferences,
+                IncludeSubtypes = true,
+                NodeClassMask = (int)(NodeClass.Object | NodeClass.Variable),
+                ResultMask = (uint)BrowseResultMask.All,
+            };
+
+            var browser = new Browser(session, options);
+            var references = (await browser.BrowseAsync(nodeId, ct).ConfigureAwait(false)).ToArray();
+
+            var descriptors = new List<TagDescriptor>(references.Length);
+            var variableIndices = new List<int>();
+            var readValues = new ReadValueIdCollection();
+
+            foreach (var reference in references)
+            {
+                var descriptor = new TagDescriptor
+                {
+                    Address = reference.NodeId.ToString(),
+                    Name = reference.DisplayName?.Text
+                        ?? reference.BrowseName?.Name
+                        ?? reference.NodeId.ToString(),
+                    IsFolder = reference.NodeClass is NodeClass.Object or NodeClass.View,
+                };
+
+                if (reference.NodeClass == NodeClass.Variable)
+                {
+                    variableIndices.Add(descriptors.Count);
+                    var referenceNodeId = NodeId.Parse(reference.NodeId.ToString());
+                    readValues.Add(new ReadValueId { NodeId = referenceNodeId, AttributeId = Attributes.DataType });
+                    readValues.Add(new ReadValueId { NodeId = referenceNodeId, AttributeId = Attributes.AccessLevel });
+                    readValues.Add(new ReadValueId { NodeId = referenceNodeId, AttributeId = Attributes.Description });
+                }
+
+                descriptors.Add(descriptor);
+            }
+
+            if (readValues.Count > 0)
+            {
+                try
+                {
+                    var response = await session.ReadAsync(
+                        null, 0, TimestampsToReturn.Neither, readValues, ct).ConfigureAwait(false);
+
+                    for (var i = 0; i < variableIndices.Count; i++)
+                    {
+                        var descriptor = descriptors[variableIndices[i]];
+                        var dataTypeIndex = i * 3;
+                        var accessIndex = dataTypeIndex + 1;
+                        var descriptionIndex = dataTypeIndex + 2;
+                        if (dataTypeIndex >= response.Results.Count) continue;
+
+                        if (response.Results[dataTypeIndex].Value is NodeId dataType)
+                            descriptor = descriptor with { DataType = DataTypes.GetBuiltInType(dataType).ToString() };
+
+                        if (accessIndex < response.Results.Count
+                            && response.Results[accessIndex].Value is byte accessLevel)
+                        {
+                            descriptor = descriptor with
+                            {
+                                IsWritable = (accessLevel & AccessLevels.CurrentWrite) != 0,
+                            };
+                        }
+
+                        if (descriptionIndex < response.Results.Count
+                            && response.Results[descriptionIndex].Value is LocalizedText description
+                            && !string.IsNullOrEmpty(description.Text))
+                        {
+                            descriptor = descriptor with { Description = description.Text };
+                        }
+
+                        descriptors[variableIndices[i]] = descriptor;
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    // 子节点已浏览成功，属性读取失败只降级 DataType/IsWritable，不丢掉整棵目录。
+                    OpcUaLog.LogReadPointFailed(_logger, ex, "browse-attributes");
+                }
+            }
+
+            return descriptors;
         }
 
         public async Task StartPushingAsync(
