@@ -15,6 +15,7 @@ using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.Bacnet
 {
+    /// <summary>BACnet/IP 驱动</summary>
     [ProtocolDriverName("BACnet")]
     public sealed class BacnetDriver : ProtocolDriverBase<BacnetClient>
     {
@@ -23,12 +24,16 @@ namespace PlcLibrary.Bacnet
         private BacnetAddress? _deviceAddress;
         private int _disposed;
 
+        /// <summary>创建 BACnet 驱动</summary>
+        /// <param name="logger">日志</param>
+        /// <param name="device">设备配置</param>
         public BacnetDriver(ILogger<BacnetDriver> logger, DeviceConfiguration device)
         {
             _logger = logger;
             _config = BacnetDriverConfig.Parse(device.ConnectionString);
         }
 
+        /// <inheritdoc/>
         public override async Task ConnectAsync(CancellationToken ct = default)
         {
             DisconnectInternal();
@@ -108,6 +113,7 @@ namespace PlcLibrary.Bacnet
             }
         }
 
+        /// <inheritdoc/>
         public override Task DisconnectAsync(CancellationToken ct = default)
         {
             DisconnectInternal();
@@ -125,10 +131,13 @@ namespace PlcLibrary.Bacnet
             }
         }
 
+        /// <inheritdoc/>
         protected override void OnReconnected() => BacnetLog.LogReconnected(_logger);
 
+        /// <inheritdoc/>
         protected override void OnReconnectFailed(Exception ex) => BacnetLog.LogReconnectFailed(_logger, ex);
 
+        /// <inheritdoc/>
         public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             var (client, deviceAddress) = GetClientAndAddressOrThrow();
@@ -211,6 +220,7 @@ namespace PlcLibrary.Bacnet
             return results;
         }
 
+        /// <inheritdoc/>
         public override async Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
@@ -256,6 +266,7 @@ namespace PlcLibrary.Bacnet
             return results;
         }
 
+        /// <inheritdoc/>
         public override async ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)

@@ -13,6 +13,9 @@ namespace PlcLibrary.DriverDomain
     /// </summary>
     public static class TransportFailureDetector
     {
+        /// <summary>判断异常是否为连接/传输级故障</summary>
+        /// <param name="ex">待判断异常</param>
+        /// <returns>传输级故障返回 true</returns>
         public static bool IsTransportFailure(Exception ex)
         {
             ex = Unwrap(ex);

@@ -6,9 +6,13 @@ using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.Modbus
 {
+    /// <summary>Modbus UDP 驱动</summary>
     [ProtocolDriverName("Modbus_UDP")]
     public sealed class ModbusUdpDriver : ModbusDriverBase
     {
+        /// <summary>创建 Modbus UDP 驱动</summary>
+        /// <param name="logger">日志</param>
+        /// <param name="device">设备配置</param>
         public ModbusUdpDriver(ILogger<ModbusUdpDriver> logger, DeviceConfiguration device)
             : base(logger, ModbusDriverConfig.Parse(device.ConnectionString), () => CreateMaster(device.ConnectionString)) { }
 

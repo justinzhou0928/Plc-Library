@@ -21,6 +21,7 @@ using Snet.Model.@enum;
 
 namespace PlcLibrary.Mitsubishi
 {
+    /// <summary>Mitsubishi MC 驱动</summary>
     [ProtocolDriverName("Mitsubishi")]
     public sealed class MitsubishiDriver : ProtocolDriverBase<MitsubishiOperate>
     {
@@ -51,12 +52,16 @@ namespace PlcLibrary.Mitsubishi
         private readonly ILogger<MitsubishiDriver> _logger;
         private readonly MitsubishiDriverConfig _config;
 
+        /// <summary>创建 Mitsubishi MC 驱动</summary>
+        /// <param name="logger">日志</param>
+        /// <param name="device">设备配置</param>
         public MitsubishiDriver(ILogger<MitsubishiDriver> logger, DeviceConfiguration device)
         {
             _logger = logger;
             _config = MitsubishiDriverConfig.Parse(device.ConnectionString);
         }
 
+        /// <inheritdoc/>
         public override async Task ConnectAsync(CancellationToken ct = default)
         {
             await DisconnectAsync(ct).ConfigureAwait(false);
@@ -97,6 +102,7 @@ namespace PlcLibrary.Mitsubishi
             }
         }
 
+        /// <inheritdoc/>
         public override async Task DisconnectAsync(CancellationToken ct = default)
         {
             var old = DetachClient();
@@ -112,16 +118,20 @@ namespace PlcLibrary.Mitsubishi
             }
         }
 
+        /// <inheritdoc/>
         protected override void OnReconnected() => MitsubishiLog.LogReconnected(_logger);
 
+        /// <inheritdoc/>
         protected override void OnReconnectFailed(Exception ex) => MitsubishiLog.LogReconnectFailed(_logger, ex);
 
+        /// <inheritdoc/>
         public override async ValueTask DisposeAsync()
         {
             await base.DisposeAsync().ConfigureAwait(false);
             MitsubishiLog.LogDisposed(_logger);
         }
 
+        /// <inheritdoc/>
         public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             var operate = GetClientOrThrow("Mitsubishi");
@@ -143,6 +153,7 @@ namespace PlcLibrary.Mitsubishi
             return results;
         }
 
+        /// <inheritdoc/>
         public override async Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {

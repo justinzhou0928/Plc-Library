@@ -17,6 +17,7 @@ using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.AllenBradley
 {
+    /// <summary>Allen-Bradley Logix Tag 驱动</summary>
     [ProtocolDriverName("AllenBradley")]
     public sealed class AllenBradleyDriver : ProtocolDriverBase<TagClient>
     {
@@ -33,12 +34,16 @@ namespace PlcLibrary.AllenBradley
             .FirstOrDefault(m => m.Name == "WriteAsync" && m.IsGenericMethodDefinition
                 && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 3);
 
+        /// <summary>创建 Allen-Bradley 驱动</summary>
+        /// <param name="logger">日志</param>
+        /// <param name="device">设备配置</param>
         public AllenBradleyDriver(ILogger<AllenBradleyDriver> logger, DeviceConfiguration device)
         {
             _logger = logger;
             _config = AllenBradleyDriverConfig.Parse(device.ConnectionString);
         }
 
+        /// <inheritdoc/>
         public override async Task ConnectAsync(CancellationToken ct = default)
         {
             await DisconnectAsync(ct).ConfigureAwait(false);
@@ -69,6 +74,7 @@ namespace PlcLibrary.AllenBradley
             }
         }
 
+        /// <inheritdoc/>
         public override async Task DisconnectAsync(CancellationToken ct = default)
         {
             var old = DetachClient();
@@ -81,16 +87,20 @@ namespace PlcLibrary.AllenBradley
             }
         }
 
+        /// <inheritdoc/>
         protected override void OnReconnected() => AllenBradleyLog.LogReconnected(_logger);
 
+        /// <inheritdoc/>
         protected override void OnReconnectFailed(Exception ex) => AllenBradleyLog.LogReconnectFailed(_logger, ex);
 
+        /// <inheritdoc/>
         public override async ValueTask DisposeAsync()
         {
             await base.DisposeAsync().ConfigureAwait(false);
             AllenBradleyLog.LogDisposed(_logger);
         }
 
+        /// <inheritdoc/>
         public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             var tagClient = GetClientOrThrow("AllenBradley");
@@ -320,6 +330,7 @@ namespace PlcLibrary.AllenBradley
             }
         }
 
+        /// <inheritdoc/>
         public override async Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {

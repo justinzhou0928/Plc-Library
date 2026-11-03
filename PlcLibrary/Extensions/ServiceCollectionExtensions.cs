@@ -17,8 +17,11 @@ using PlcLibrary.Pipeline.Models;
 
 namespace PlcLibrary.Extensions
 {
+    /// <summary>PLC 库 DI 注册扩展</summary>
     public static class ServiceCollectionExtensions
     {
+        /// <summary>注册 PLC 库（不绑定配置）</summary>
+        /// <param name="services">服务集合</param>
         public static IServiceCollection AddPlcLibrary(this IServiceCollection services)
         {
             services.AddOptions<PoolOptions>().ValidateDataAnnotations().ValidateOnStart();
@@ -26,6 +29,9 @@ namespace PlcLibrary.Extensions
             return services.AddPlcLibraryCore();
         }
 
+        /// <summary>注册 PLC 库并绑定配置节</summary>
+        /// <param name="services">服务集合</param>
+        /// <param name="configuration">应用配置</param>
         public static IServiceCollection AddPlcLibrary(this IServiceCollection services, IConfiguration configuration)
         {
             services.AddOptions<PoolOptions>()
@@ -63,6 +69,9 @@ namespace PlcLibrary.Extensions
             return services;
         }
 
+        /// <summary>注册协议驱动</summary>
+        /// <typeparam name="TDriver">驱动类型</typeparam>
+        /// <param name="services">服务集合</param>
         public static IServiceCollection AddDriver<TDriver>(this IServiceCollection services)
             where TDriver : class, IProtocolDriver
         {

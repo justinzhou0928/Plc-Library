@@ -13,16 +13,22 @@ namespace PlcLibrary.Monitor.Models
     /// </summary>
     public readonly record struct PlcPointId
     {
+        /// <summary>设备标识</summary>
         public string DeviceId { get; init; }
 
+        /// <summary>点位业务标识</summary>
         public string TagId { get; init; }
 
+        /// <summary>创建点位标识</summary>
+        /// <param name="deviceId">设备标识</param>
+        /// <param name="tagId">点位标识</param>
         public PlcPointId(string deviceId, string tagId)
         {
             DeviceId = deviceId ?? throw new ArgumentNullException(nameof(deviceId));
             TagId = tagId ?? throw new ArgumentNullException(nameof(tagId));
         }
 
+        /// <inheritdoc/>
         public override string ToString() => $"{DeviceId}/{TagId}";
     }
 }

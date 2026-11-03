@@ -16,12 +16,16 @@ using S7.Net.Types;
 
 namespace PlcLibrary.S7
 {
+    /// <summary>Siemens S7 驱动</summary>
+    /// <param name="logger">日志</param>
+    /// <param name="device">设备配置</param>
     [ProtocolDriverName("S7")]
     public sealed class S7Driver(ILogger<S7Driver> logger, DeviceConfiguration device)
         : ProtocolDriverBase<Plc>
     {
         private readonly S7DriverConfig _config = S7DriverConfig.Parse(device.ConnectionString);
 
+        /// <inheritdoc/>
         public override async Task ConnectAsync(CancellationToken ct = default)
         {
             await DisconnectAsync(ct).ConfigureAwait(false);
@@ -54,6 +58,7 @@ namespace PlcLibrary.S7
             }
         }
 
+        /// <inheritdoc/>
         public override Task DisconnectAsync(CancellationToken ct = default)
         {
             var old = DetachClient();
@@ -63,10 +68,13 @@ namespace PlcLibrary.S7
             return Task.CompletedTask;
         }
 
+        /// <inheritdoc/>
         protected override void OnReconnected() => S7Log.LogReconnected(logger, _config.Host);
 
+        /// <inheritdoc/>
         protected override void OnReconnectFailed(Exception ex) => S7Log.LogReconnectFailed(logger, ex, _config.Host);
 
+        /// <inheritdoc/>
         public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             var plc = GetClientOrThrow("S7");
@@ -160,6 +168,7 @@ namespace PlcLibrary.S7
             return results;
         }
 
+        /// <inheritdoc/>
         public override async Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {

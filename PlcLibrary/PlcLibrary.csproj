@@ -1,8 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-  </PropertyGroup>
-
   <ItemGroup>
     <InternalsVisibleTo Include="PlcLibrary.Tests" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />

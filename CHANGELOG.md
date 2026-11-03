@@ -37,6 +37,7 @@
 - 新增 [docs/SCOPE.md](docs/SCOPE.md)：库职责与 SCADA 职责边界、本轮落地项与剩余补齐优先级
 - README/DEVELOPMENT 同步时间戳、指标、推送心跳与已知限制
 - AGENTS 合并通用 .NET 规范（异步/注释/编码/命名/验证），并精简 README/DEVELOPMENT 与过期注释
+- 公共 API 补齐 XML 注释，默认启用 `GenerateDocumentationFile`；`dotnet format --verify-no-changes` 通过
 
 ## [1.3.5] - 2026-11-03
 

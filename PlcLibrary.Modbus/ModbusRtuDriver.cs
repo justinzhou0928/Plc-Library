@@ -8,6 +8,9 @@ using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.Modbus
 {
+    /// <summary>Modbus RTU 驱动</summary>
+    /// <param name="logger">日志</param>
+    /// <param name="device">设备配置</param>
     [ProtocolDriverName("Modbus_RTU")]
     public sealed class ModbusRtuDriver(ILogger<ModbusRtuDriver> logger, DeviceConfiguration device)
         : ModbusDriverBase(logger, ModbusDriverConfig.Parse(device.ConnectionString),

@@ -4,6 +4,7 @@ using System.Text;
 
 namespace PlcLibrary.DriverDomain.Parser
 {
+    /// <summary>连接串 key:value 解析器</summary>
     public static class KeyValueConnectionString
     {
         /// <summary>

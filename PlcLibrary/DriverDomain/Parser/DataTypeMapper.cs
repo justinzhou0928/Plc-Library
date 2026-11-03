@@ -3,6 +3,7 @@ using System.Collections.Generic;
 
 namespace PlcLibrary.DriverDomain.Parser
 {
+    /// <summary>点位 DataType 名称到 CLR 类型的映射</summary>
     public static class DataTypeMapper
     {
         private static readonly Dictionary<string, Type> Aliases = new(StringComparer.OrdinalIgnoreCase)

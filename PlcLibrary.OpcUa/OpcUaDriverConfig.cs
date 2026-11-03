@@ -2,6 +2,7 @@ using PlcLibrary.DriverDomain.Parser;
 
 namespace PlcLibrary.OpcUa
 {
+    /// <summary>OPC UA 连接配置</summary>
     public sealed record OpcUaDriverConfig
     {
         /// <summary>OPC UA 服务端端点。</summary>

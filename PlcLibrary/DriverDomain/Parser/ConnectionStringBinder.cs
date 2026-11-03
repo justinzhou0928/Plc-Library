@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 
 namespace PlcLibrary.DriverDomain.Parser
 {
+    /// <summary>连接串到配置对象的绑定器</summary>
     public static class ConnectionStringBinder
     {
         /// <summary>

@@ -16,6 +16,7 @@ using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.Omron
 {
+    /// <summary>Omron FINS/TCP 驱动</summary>
     [ProtocolDriverName("Omron_FINS")]
     public sealed class OmronDriver : ProtocolDriverBase<FinsClient>
     {
@@ -54,12 +55,16 @@ namespace PlcLibrary.Omron
         private static MethodInfo? FindMethod(IEnumerable<MethodInfo> methods, string name, int parameterCount)
             => methods.FirstOrDefault(m => m.Name == name && m.GetParameters().Length == parameterCount);
 
+        /// <summary>创建 Omron FINS 驱动</summary>
+        /// <param name="logger">日志</param>
+        /// <param name="device">设备配置</param>
         public OmronDriver(ILogger<OmronDriver> logger, DeviceConfiguration device)
         {
             _logger = logger;
             _config = OmronDriverConfig.Parse(device.ConnectionString);
         }
 
+        /// <inheritdoc/>
         public override async Task ConnectAsync(CancellationToken ct = default)
         {
             await DisconnectAsync(ct).ConfigureAwait(false);
@@ -101,6 +106,7 @@ namespace PlcLibrary.Omron
             }
         }
 
+        /// <inheritdoc/>
         public override Task DisconnectAsync(CancellationToken ct = default)
         {
             var old = DetachClient();
@@ -118,16 +124,20 @@ namespace PlcLibrary.Omron
             return Task.CompletedTask;
         }
 
+        /// <inheritdoc/>
         protected override void OnReconnected() => OmronLog.LogReconnected(_logger);
 
+        /// <inheritdoc/>
         protected override void OnReconnectFailed(Exception ex) => OmronLog.LogReconnectFailed(_logger, ex);
 
+        /// <inheritdoc/>
         public override async ValueTask DisposeAsync()
         {
             await base.DisposeAsync().ConfigureAwait(false);
             OmronLog.LogDisposed(_logger);
         }
 
+        /// <inheritdoc/>
         public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             var client = GetClientOrThrow("Omron FINS");
@@ -195,6 +205,7 @@ namespace PlcLibrary.Omron
             return results;
         }
 
+        /// <inheritdoc/>
         public override async Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {

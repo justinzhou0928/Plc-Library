@@ -8,16 +8,20 @@ using PlcLibrary.Pipeline.Interfaces;
 
 namespace PlcLibrary.Monitor.Extensions
 {
+    /// <summary>Monitor DI 注册扩展</summary>
     public static class ServiceCollectionExtensions
     {
-        /// <summary>注册 PLC 实时值监控缓存（默认配置）。需先调用 <c>AddPlcLibrary()</c>。</summary>
+        /// <summary>注册 PLC 实时值监控缓存（默认配置）；需先调用 <c>AddPlcLibrary()</c></summary>
+        /// <param name="services">服务集合</param>
         public static IServiceCollection AddPlcMonitor(this IServiceCollection services)
         {
             services.AddOptions<MonitorOptions>().ValidateDataAnnotations().ValidateOnStart();
             return services.AddPlcMonitorCore();
         }
 
-        /// <summary>注册 PLC 实时值监控缓存，并从配置节 <c>"Monitor"</c> 绑定 <see cref="MonitorOptions"/>。</summary>
+        /// <summary>注册 PLC 实时值监控缓存，并从配置节 <c>"Monitor"</c> 绑定 <see cref="MonitorOptions"/></summary>
+        /// <param name="services">服务集合</param>
+        /// <param name="configuration">应用配置</param>
         public static IServiceCollection AddPlcMonitor(this IServiceCollection services, IConfiguration configuration)
         {
             services.AddOptions<MonitorOptions>()

@@ -8,6 +8,9 @@ using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.Modbus
 {
+    /// <summary>Modbus ASCII 驱动</summary>
+    /// <param name="logger">日志</param>
+    /// <param name="device">设备配置</param>
     [ProtocolDriverName("Modbus_ASCII")]
     public sealed class ModbusAsciiDriver(ILogger<ModbusAsciiDriver> logger, DeviceConfiguration device)
         : ModbusDriverBase(logger, ModbusDriverConfig.Parse(device.ConnectionString),

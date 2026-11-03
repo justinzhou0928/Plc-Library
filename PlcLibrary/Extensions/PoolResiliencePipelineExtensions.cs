@@ -10,8 +10,14 @@ using Polly.Timeout;
 
 namespace PlcLibrary.Extensions
 {
+    /// <summary>连接级 Polly 弹性管线扩展</summary>
     public static class PoolResiliencePipelineExtensions
     {
+        /// <summary>添加连接级重试/超时/断路器策略</summary>
+        /// <param name="builder">Polly 管线构建器</param>
+        /// <param name="options">池配置</param>
+        /// <param name="logger">日志</param>
+        /// <param name="deviceId">设备标识（用于指标）</param>
         public static ResiliencePipelineBuilder AddPoolStrategies(
             this ResiliencePipelineBuilder builder,
             PoolOptions options,

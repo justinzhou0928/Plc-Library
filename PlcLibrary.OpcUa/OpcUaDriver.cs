@@ -16,6 +16,7 @@ using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.OpcUa
 {
+    /// <summary>OPC UA 客户端驱动，支持读/写、订阅推送和标签浏览</summary>
     [ProtocolDriverName("OPC_UA")]
     public sealed class OpcUaDriver : ProtocolDriverBase<Session>, IPushProtocolDriver, ITagBrowser
     {
@@ -30,12 +31,16 @@ namespace PlcLibrary.OpcUa
         private KeepAliveEventHandler? _keepAliveHandler;
         private int _disposed;
 
+        /// <summary>创建 OPC UA 驱动</summary>
+        /// <param name="logger">日志</param>
+        /// <param name="device">设备配置</param>
         public OpcUaDriver(ILogger<OpcUaDriver> logger, DeviceConfiguration device)
         {
             _logger = logger;
             _config = OpcUaDriverConfig.Parse(device.ConnectionString);
         }
 
+        /// <inheritdoc/>
         public override async Task ConnectAsync(CancellationToken ct = default)
         {
             await DisconnectAsync(ct).ConfigureAwait(false);
@@ -109,6 +114,7 @@ namespace PlcLibrary.OpcUa
             }
         }
 
+        /// <inheritdoc/>
         public override async Task DisconnectAsync(CancellationToken ct = default)
         {
             Session? session;
@@ -137,10 +143,13 @@ namespace PlcLibrary.OpcUa
             }
         }
 
+        /// <inheritdoc/>
         protected override void OnReconnected() => OpcUaLog.LogReconnected(_logger);
 
+        /// <inheritdoc/>
         protected override void OnReconnectFailed(Exception ex) => OpcUaLog.LogReconnectFailed(_logger, ex);
 
+        /// <inheritdoc/>
         public override async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             var session = GetClientOrThrow("OPC UA");
@@ -194,6 +203,7 @@ namespace PlcLibrary.OpcUa
             return results;
         }
 
+        /// <inheritdoc/>
         public override async Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
@@ -360,6 +370,7 @@ namespace PlcLibrary.OpcUa
             return descriptors;
         }
 
+        /// <inheritdoc/>
         public async Task StartPushingAsync(
             TagPointConfiguration[] points,
             Func<DriverResult, CancellationToken, ValueTask> onData,
@@ -457,6 +468,7 @@ namespace PlcLibrary.OpcUa
             catch (OperationCanceledException) { }
         }
 
+        /// <inheritdoc/>
         public Task StopPushingAsync(CancellationToken ct)
         {
             IList<Subscription>? subs;
@@ -492,6 +504,7 @@ namespace PlcLibrary.OpcUa
             return Task.CompletedTask;
         }
 
+        /// <inheritdoc/>
         public override async ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)

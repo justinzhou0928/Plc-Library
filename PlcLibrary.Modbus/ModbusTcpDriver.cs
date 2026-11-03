@@ -9,9 +9,13 @@ using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.Modbus
 {
+    /// <summary>Modbus TCP 驱动</summary>
     [ProtocolDriverName("Modbus_TCP")]
     public sealed class ModbusTcpDriver : ModbusDriverBase
     {
+        /// <summary>创建 Modbus TCP 驱动</summary>
+        /// <param name="logger">日志</param>
+        /// <param name="device">设备配置</param>
         public ModbusTcpDriver(ILogger<ModbusTcpDriver> logger, DeviceConfiguration device)
             : base(logger, ModbusDriverConfig.Parse(device.ConnectionString),
                 ct => CreateMasterAsync(device.ConnectionString, ct))

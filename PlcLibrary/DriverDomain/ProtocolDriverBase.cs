@@ -129,13 +129,23 @@ namespace PlcLibrary.DriverDomain
         public virtual async ValueTask DisposeAsync()
             => await DisconnectAsync().ConfigureAwait(false);
 
+        /// <summary>建立连接</summary>
+        /// <param name="ct">取消令牌</param>
         public abstract Task ConnectAsync(CancellationToken ct = default);
 
+        /// <summary>断开连接</summary>
+        /// <param name="ct">取消令牌</param>
         public abstract Task DisconnectAsync(CancellationToken ct = default);
 
+        /// <summary>批量读取点位</summary>
+        /// <param name="points">点位列表</param>
+        /// <param name="ct">取消令牌</param>
         public abstract Task<DriverResult[]> ReadAsync(
             TagPointConfiguration[] points, CancellationToken ct = default);
 
+        /// <summary>批量写入点位</summary>
+        /// <param name="values">点位与值</param>
+        /// <param name="ct">取消令牌</param>
         public abstract Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default);
     }

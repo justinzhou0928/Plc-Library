@@ -13,6 +13,7 @@ using PlcLibrary.General.Configuration;
 
 namespace PlcLibrary.Modbus
 {
+    /// <summary>Modbus 驱动基类，统一连接/状态/读写编解码</summary>
     public abstract class ModbusDriverBase : IProtocolDriver
     {
         private readonly ILogger _logger;
@@ -23,12 +24,19 @@ namespace PlcLibrary.Modbus
         private IModbusMaster? _master;
         private DriverStatus _status = DriverStatus.Disconnected;
 
+        /// <summary>创建 Modbus 驱动基类</summary>
+        /// <param name="logger">日志</param>
+        /// <param name="config">连接配置</param>
+        /// <param name="masterFactory">同步 master 工厂</param>
         protected ModbusDriverBase(ILogger logger, ModbusDriverConfig config, Func<IModbusMaster> masterFactory)
             : this(logger, config, _ => Task.FromResult(masterFactory()))
         {
         }
 
-        /// <summary>异步工厂重载：TCP 等需要异步连接的传输可在此完成连接并响应取消/超时。</summary>
+        /// <summary>异步工厂重载：TCP 等需要异步连接的传输可在此完成连接并响应取消/超时</summary>
+        /// <param name="logger">日志</param>
+        /// <param name="config">连接配置</param>
+        /// <param name="masterFactory">异步 master 工厂</param>
         protected ModbusDriverBase(
             ILogger logger, ModbusDriverConfig config, Func<CancellationToken, Task<IModbusMaster>> masterFactory)
         {
@@ -40,11 +48,13 @@ namespace PlcLibrary.Modbus
                 throw new ArgumentException($"Invalid Modbus ByteOrder '{_defaultByteOrder}'", nameof(config));
         }
 
+        /// <inheritdoc/>
         public DriverStatus DriverStatus
         {
             get { lock (_stateLock) return _status; }
         }
 
+        /// <inheritdoc/>
         public async Task ConnectAsync(CancellationToken ct = default)
         {
             try
@@ -77,6 +87,7 @@ namespace PlcLibrary.Modbus
             }
         }
 
+        /// <inheritdoc/>
         public Task DisconnectAsync(CancellationToken ct = default)
         {
             Disconnect(ct);
@@ -97,6 +108,7 @@ namespace PlcLibrary.Modbus
             catch { }
         }
 
+        /// <inheritdoc/>
         public async Task<bool> TryReconnectAsync(CancellationToken ct = default)
         {
             try
@@ -113,6 +125,7 @@ namespace PlcLibrary.Modbus
             }
         }
 
+        /// <inheritdoc/>
         public async Task<DriverResult[]> ReadAsync(TagPointConfiguration[] points, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -144,6 +157,7 @@ namespace PlcLibrary.Modbus
             return results;
         }
 
+        /// <inheritdoc/>
         public async Task<DriverResult[]> WriteAsync(
             IReadOnlyDictionary<TagPointConfiguration, object> values, CancellationToken ct = default)
         {
@@ -226,6 +240,7 @@ namespace PlcLibrary.Modbus
             return results;
         }
 
+        /// <inheritdoc/>
         public async ValueTask DisposeAsync()
         {
             await DisconnectAsync().ConfigureAwait(false);
